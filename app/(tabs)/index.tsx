@@ -546,7 +546,7 @@ export default function ScheduleScreen() {
                     {bottomSheetTarget.note || 'Không có ghi chú'}
                   </Text>
                   <Text style={styles.bsDaysLabel}>
-                    <FontAwesome6 name="rotate" size={11} color="#1F5CA9" />
+                    <FontAwesome6 name="rotate" size={11} color="#fff200" />
                     {'  '}{formatDaysLabel(bottomSheetTarget.days)}
                   </Text>
                 </View>
@@ -916,9 +916,9 @@ const styles = StyleSheet.create({
   },
   bsInfoSimple: { paddingHorizontal: 4, paddingBottom: 20, gap: 4 },
   bsInfoTime: { fontSize: 40, fontWeight: '800', color: '#1F5CA9', letterSpacing: 1 },
-  bsInfoNote: { fontSize: 15, fontWeight: '500', color: '#4A5568' },
-  bsInfoNotePlaceholder: { fontSize: 15, fontWeight: '400', color: '#A0AEC0', fontStyle: 'italic' },
-  bsDaysLabel: { fontSize: 13, fontWeight: '500', color: '#1F5CA9' },
+  bsInfoNote: { fontSize: 15, fontWeight: '500', color: '#00AFE1' },
+  bsInfoNotePlaceholder: { fontSize: 15, fontWeight: '400', color: '#A0AEC0' },
+  bsDaysLabel: { fontSize: 13, fontWeight: '500', color: '#fff200' },
   bottomSheetDivider: { height: 1, backgroundColor: '#F0F4F8', marginBottom: 16 },
   bottomSheetDeleteBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

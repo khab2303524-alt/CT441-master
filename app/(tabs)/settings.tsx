@@ -410,7 +410,7 @@ export default function SettingsScreen() {
                             </Text>
                             {isSelected && (
                               <View style={styles.wifiItemBadge}>
-                                <Text style={styles.wifiItemBadgeText}>Đang dùng</Text>
+                                <Text style={styles.wifiItemBadgeText}>Đã kết nối</Text>
                               </View>
                             )}
                             <Ionicons name="chevron-forward" size={16} color="#C8D3E8" style={{ marginLeft: 'auto' }} />
@@ -796,12 +796,11 @@ const styles = StyleSheet.create({
   wifiItemName: { flex: 1, fontSize: 14, fontWeight: '500', color: '#11181C' },
   wifiItemNameActive: { color: '#1F5CA9', fontWeight: '700' },
   wifiItemBadge: {
-    backgroundColor: '#DCEDFF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20,
+    backgroundColor: '#ffffff', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderColor: '#1F5CA9', borderWidth: 1, marginLeft: 6,
   },
   wifiItemBadgeText: { fontSize: 11, fontWeight: '600', color: '#1F5CA9' },
   noWifiText: { textAlign: 'center', color: '#7A8FAD', fontSize: 13, marginTop: 16, marginBottom: 4 },
 
-  // Connecting banner
   connectingBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: '#1F5CA9', borderRadius: 10, padding: 12, marginTop: 12,
