@@ -304,10 +304,6 @@ export default function SettingsScreen() {
     Keyboard.dismiss();
     setExpandedCard(prev => {
       const next = prev === card ? null : card;
-      // Mở card Wi-Fi -> tự động quét luôn, không cần bấm nút "Quét Wi-Fi lân cận"
-      if (card === 'wifi' && next === 'wifi') {
-        handleQuetWifi();
-      }
       return next;
     });
   };
@@ -365,7 +361,6 @@ export default function SettingsScreen() {
 
               {expandedCard === 'wifi' && (
                 <View style={styles.cardBody}>
-                  {/* Dòng "Mạng lân cận" / "Làm mới" — nền trắng, không khung */}
                   <View style={styles.scanRow}>
                     <Text style={styles.scanRowLabel}>Mạng lân cận</Text>
                     <TouchableOpacity
@@ -460,8 +455,8 @@ export default function SettingsScreen() {
                       if (/^\d{0,3}$/.test(t)) setBrightnessInput(t);
                     }}
                     keyboardType="number-pad"
-                    maxLength={3}
-                    placeholder="0 – 100"
+                    maxLength={3} 
+                    placeholder="VD: 50"
                     placeholderTextColor="#A0AEC0"
                     selectTextOnFocus
                     onFocus={() => {
