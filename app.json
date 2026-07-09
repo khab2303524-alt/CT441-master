@@ -48,7 +48,7 @@
       "@react-native-community/datetimepicker",
       "expo-font",
       [
-        "@matthewwarnes/react-native-ble-manager-plugin",
+        "react-native-ble-manager",
         {
           "isBackgroundEnabled": false,
           "modes": ["central"],
