@@ -47,7 +47,15 @@
       ],
       "@react-native-community/datetimepicker",
       "expo-font",
-      "react-native-ble-plx"
+      [
+        "@matthewwarnes/react-native-ble-manager-plugin",
+        {
+          "isBackgroundEnabled": false,
+          "modes": ["central"],
+          "bluetoothAlwaysPermission": "Cho phép ứng dụng kết nối Bluetooth để cấu hình lại Wi-Fi cho đồng hồ khi bị mất mạng.",
+          "bluetoothPeripheralPermission": "Cho phép ứng dụng kết nối Bluetooth để cấu hình lại Wi-Fi cho đồng hồ khi bị mất mạng."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

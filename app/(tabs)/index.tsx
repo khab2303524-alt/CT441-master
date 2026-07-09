@@ -15,6 +15,7 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CustomSwitch } from '../../components/customswitch';
 import { FeedbackModal } from '../../components/feedbackmodal';
 import ScrollPicker from '../../components/scrollpicker';
@@ -49,6 +50,7 @@ const DayButton = React.memo(({ label, active, onPress }: {
 ));
 
 export default function ScheduleScreen() {
+  const insets = useSafeAreaInsets();
   const [showModal, setShowModal] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editTargetId, setEditTargetId] = useState<number | null>(null);
@@ -531,10 +533,20 @@ export default function ScheduleScreen() {
       )}
 
       {/* ── BOTTOM SHEET ── */}
-      <Modal visible={showBottomSheet} transparent animationType="none" onRequestClose={closeBottomSheet}>
+      <Modal
+        visible={showBottomSheet}
+        transparent
+        animationType="none"
+        onRequestClose={closeBottomSheet}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <Pressable style={styles.bottomSheetOverlay} onPress={closeBottomSheet}>
           <Animated.View
-            style={[styles.bottomSheetContainer, { transform: [{ translateY: bottomSheetAnim }] }]}
+            style={[
+              styles.bottomSheetContainer,
+              { paddingBottom: 20 + insets.bottom, transform: [{ translateY: bottomSheetAnim }] },
+            ]}
           >
             <Pressable onPress={(e) => e.stopPropagation()}>
               <View style={styles.bottomSheetHandle} />
@@ -597,7 +609,14 @@ export default function ScheduleScreen() {
       </Modal>
 
       {/* ── MODAL THÊM/SỬA ── */}
-      <Modal visible={showModal} transparent animationType="fade" onRequestClose={() => setShowModal(false)}>
+      <Modal
+        visible={showModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowModal(false)}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
         <View style={styles.modalOverlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowModal(false)} />
           <View style={styles.modalContent}>

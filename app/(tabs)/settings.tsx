@@ -19,7 +19,7 @@ import {
 } from 'react-native';
 import { FeedbackModal } from '../../components/feedbackmodal';
 import { db } from '../../config/firebaseConfig';
-import { useESPConnection } from '../../hooks';
+import { BleDeviceItem, useBleWifi, useESPConnection } from '../../hooks';
 
 type WifiItem = { ssid: string; rssi: number };
 const WIFI_CACHE_KEY = 'settings_wifi_cache_v1';
@@ -73,6 +73,13 @@ export default function SettingsScreen() {
   const [selectedSsid, setSelectedSsid] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+
+  // --- Kết nối Bluetooth (BLE) để cấu hình lại Wi-Fi khi đồng hồ bị kẹt, mất mạng ---
+  const ble = useBleWifi();
+  const [showBlePasswordModal, setShowBlePasswordModal] = useState(false);
+  const [bleSelectedSsid, setBleSelectedSsid] = useState('');
+  const [blePassword, setBlePassword] = useState('');
+  const [bleShowPassword, setBleShowPassword] = useState(false);
 
   const [dangKiemTra, setDangKiemTra] = useState(false);
   const [statusText, setStatusText] = useState('Đang kiểm tra...');
@@ -243,6 +250,66 @@ export default function SettingsScreen() {
     setShowPassword(false);
   };
 
+  // Quét thiết bị đồng hồ phát qua Bluetooth (dùng khi không còn Wi-Fi/Internet)
+  const handleQuetThietBiBLE = async () => {
+    try {
+      await ble.quetThietBi();
+    } catch (e: any) {
+      showError('Lỗi Bluetooth', e?.message || 'Không thể quét thiết bị Bluetooth.');
+    }
+  };
+
+  const handleChonThietBiBLE = async (item: BleDeviceItem) => {
+    try {
+      await ble.ketNoiThietBi(item.id);
+    } catch (e: any) {
+      showError('Lỗi Bluetooth', e?.message || 'Không thể kết nối tới đồng hồ qua Bluetooth.');
+    }
+  };
+
+  const handleQuetWifiBLE = async () => {
+    try {
+      await ble.yeuCauQuetWifiQuaBLE();
+    } catch (e: any) {
+      showError('Lỗi Bluetooth', e?.message || 'Không thể yêu cầu quét Wi-Fi qua Bluetooth.');
+    }
+  };
+
+  const handleChonWifiBLE = (item: { ssid: string; rssi: number }) => {
+    setBleSelectedSsid(item.ssid);
+    setBlePassword('');
+    setBleShowPassword(false);
+    setShowBlePasswordModal(true);
+  };
+
+  const closeBlePasswordModal = () => {
+    setShowBlePasswordModal(false);
+    setBlePassword('');
+    setBleShowPassword(false);
+  };
+
+  const handleGuiWifiBLE = async () => {
+    Keyboard.dismiss();
+    if (!bleSelectedSsid.trim()) { showError('Chưa chọn Wi-Fi', 'Vui lòng quét và chọn mạng Wi-Fi'); return; }
+    try {
+      setShowBlePasswordModal(false);
+      await ble.guiWifiQuaBLE(bleSelectedSsid.trim(), blePassword);
+      setBlePassword('');
+    } catch (e: any) {
+      showError('Lỗi Bluetooth', e?.message || 'Không thể gửi thông tin Wi-Fi qua Bluetooth.');
+    }
+  };
+
+  // Hiển thị thông báo khi có kết quả kết nối Wi-Fi qua Bluetooth
+  useEffect(() => {
+    if (ble.trangThai === 'WIFI_THANH_CONG') {
+      showSuccess('Kết nối thành công', 'Đồng hồ đã kết nối Wi-Fi mới qua Bluetooth.\nThiết bị sẽ tự khởi động lại.');
+    } else if (ble.trangThai === 'WIFI_THAT_BAI') {
+      showError('Kết nối thất bại', 'Sai mật khẩu hoặc không tìm thấy mạng.\nĐồng hồ sẽ tiếp tục dùng Wi-Fi cũ.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ble.trangThai]);
+
   const handleSaveBrightness = async () => {
     Keyboard.dismiss();
     const num = parseInt(brightnessInput, 10);
@@ -298,12 +365,20 @@ export default function SettingsScreen() {
   const parsedRingInput = parseInt(ringDurationInput, 10);
   const ringDurationChanged = !isNaN(parsedRingInput) && parsedRingInput !== savedRingDuration;
 
-  const [expandedCard, setExpandedCard] = useState<'wifi' | 'brightness' | 'ring' | null>(null);
+  const [expandedCard, setExpandedCard] = useState<'wifi' | 'brightness' | 'ring' | 'bluetooth' | null>(null);
 
-  const toggleCard = (card: 'wifi' | 'brightness' | 'ring') => {
+  const toggleCard = (card: 'wifi' | 'brightness' | 'ring' | 'bluetooth') => {
     Keyboard.dismiss();
     setExpandedCard(prev => {
       const next = prev === card ? null : card;
+      // Mở card Wi-Fi -> tự động quét luôn, không cần bấm nút "Quét Wi-Fi lân cận"
+      if (card === 'wifi' && next === 'wifi') {
+        handleQuetWifi();
+      }
+      // Đóng card Bluetooth -> ngắt kết nối BLE để tiết kiệm pin điện thoại lẫn đồng hồ
+      if (card === 'bluetooth' && next === null) {
+        ble.ngatKetNoi();
+      }
       return next;
     });
   };
@@ -361,6 +436,7 @@ export default function SettingsScreen() {
 
               {expandedCard === 'wifi' && (
                 <View style={styles.cardBody}>
+                  {/* Dòng "Mạng lân cận" / "Làm mới" — nền trắng, không khung */}
                   <View style={styles.scanRow}>
                     <Text style={styles.scanRowLabel}>Mạng lân cận</Text>
                     <TouchableOpacity
@@ -405,7 +481,7 @@ export default function SettingsScreen() {
                             </Text>
                             {isSelected && (
                               <View style={styles.wifiItemBadge}>
-                                <Text style={styles.wifiItemBadgeText}>Đã kết nối</Text>
+                                <Text style={styles.wifiItemBadgeText}>Đang dùng</Text>
                               </View>
                             )}
                             <Ionicons name="chevron-forward" size={16} color="#C8D3E8" style={{ marginLeft: 'auto' }} />
@@ -417,6 +493,139 @@ export default function SettingsScreen() {
 
                   {!dangQuet && daCo1LanQuet && danhSachWifi.length === 0 && (
                     <Text style={styles.noWifiText}>Không tìm thấy mạng Wi-Fi nào.</Text>
+                  )}
+                </View>
+              )}
+            </View>
+          </Pressable>
+
+          {/* Card Bluetooth - cứu hộ khi đồng hồ bị kẹt/mất Wi-Fi */}
+          <Pressable onPress={(e) => e.stopPropagation()}>
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.cardHeader}
+                onPress={() => toggleCard('bluetooth')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.cardIconBox}>
+                  <Ionicons name="bluetooth" size={20} color="#1F5CA9" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>Kết nối Bluetooth</Text>
+                  <Text style={styles.cardSubtitle}>
+                    {ble.thietBiDangKetNoi ? 'Đã kết nối với đồng hồ' : 'Dùng khi đồng hồ mất Wi-Fi'}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-down"
+                  size={20}
+                  color="#7A8FAD"
+                  style={{ transform: [{ rotate: expandedCard === 'bluetooth' ? '180deg' : '0deg' }] }}
+                />
+              </TouchableOpacity>
+
+              {expandedCard === 'bluetooth' && (
+                <View style={styles.cardBody}>
+                  <Text style={styles.tuneHintText}>
+                    Nếu đồng hồ không kết nối được Wi-Fi (mất mạng, đổi mật khẩu, đổi router...),
+                    hãy dùng Bluetooth trên điện thoại để kết nối trực tiếp tới đồng hồ và cấu hình lại Wi-Fi.
+                  </Text>
+
+                  {!ble.thietBiDangKetNoi ? (
+                    <>
+                      <View style={styles.scanRow}>
+                        <Text style={styles.scanRowLabel}>Thiết bị lân cận</Text>
+                        <TouchableOpacity
+                          onPress={handleQuetThietBiBLE}
+                          activeOpacity={0.6}
+                          disabled={ble.dangQuetThietBi}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          {ble.dangQuetThietBi ? (
+                            <ActivityIndicator size="small" color="#1F5CA9" />
+                          ) : (
+                            <Text style={styles.scanRowAction}>Quét thiết bị</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+
+                      {ble.danhSachThietBi.length > 0 && (
+                        <View style={styles.wifiList}>
+                          {ble.danhSachThietBi.map((item) => (
+                            <TouchableOpacity
+                              key={item.id}
+                              style={styles.wifiItem}
+                              onPress={() => handleChonThietBiBLE(item)}
+                              activeOpacity={0.7}
+                            >
+                              <Ionicons name="hardware-chip-outline" size={20} color="#4A5568" />
+                              <Text style={styles.wifiItemName} numberOfLines={1}>{item.name}</Text>
+                              <Ionicons name="chevron-forward" size={16} color="#C8D3E8" style={{ marginLeft: 'auto' }} />
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+
+                      {!ble.dangQuetThietBi && ble.danhSachThietBi.length === 0 && (
+                        <Text style={styles.noWifiText}>
+                          Chưa tìm thấy đồng hồ. Bấm "Quét thiết bị" và đảm bảo Bluetooth điện thoại đang bật.
+                        </Text>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.connectingBanner}>
+                        <Ionicons name="bluetooth" size={16} color="#ffffff" />
+                        <Text style={styles.connectingText}>
+                          {ble.trangThai === 'DANG_QUET_WIFI' && 'Đang quét Wi-Fi từ đồng hồ...'}
+                          {ble.trangThai === 'DANG_KET_NOI_WIFI' && 'Đang kết nối Wi-Fi mới...'}
+                          {(ble.trangThai === 'DA_KET_NOI_BLE' || ble.trangThai === 'WIFI_THANH_CONG' || ble.trangThai === 'WIFI_THAT_BAI') &&
+                            'Đã kết nối Bluetooth với đồng hồ'}
+                        </Text>
+                      </View>
+
+                      <View style={styles.scanRow}>
+                        <Text style={styles.scanRowLabel}>Wi-Fi từ đồng hồ</Text>
+                        <TouchableOpacity
+                          onPress={handleQuetWifiBLE}
+                          activeOpacity={0.6}
+                          disabled={ble.trangThai === 'DANG_QUET_WIFI' || ble.trangThai === 'DANG_KET_NOI_WIFI'}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          {ble.trangThai === 'DANG_QUET_WIFI' ? (
+                            <ActivityIndicator size="small" color="#1F5CA9" />
+                          ) : (
+                            <Text style={styles.scanRowAction}>Quét Wi-Fi</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+
+                      {ble.danhSachWifiBLE.length > 0 && (
+                        <View style={styles.wifiList}>
+                          {ble.danhSachWifiBLE.map((item, idx) => (
+                            <TouchableOpacity
+                              key={`${item.ssid}-${idx}`}
+                              style={styles.wifiItem}
+                              onPress={() => handleChonWifiBLE(item)}
+                              activeOpacity={0.7}
+                              disabled={ble.trangThai === 'DANG_KET_NOI_WIFI'}
+                            >
+                              <Ionicons name="wifi" size={20} color="#4A5568" />
+                              <Text style={styles.wifiItemName} numberOfLines={1}>{item.ssid}</Text>
+                              <Ionicons name="chevron-forward" size={16} color="#C8D3E8" style={{ marginLeft: 'auto' }} />
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+
+                      <TouchableOpacity
+                        onPress={() => ble.ngatKetNoi()}
+                        activeOpacity={0.7}
+                        style={{ marginTop: 14 }}
+                      >
+                        <Text style={[styles.scanRowAction, { textAlign: 'center' }]}>Ngắt kết nối Bluetooth</Text>
+                      </TouchableOpacity>
+                    </>
                   )}
                 </View>
               )}
@@ -455,8 +664,8 @@ export default function SettingsScreen() {
                       if (/^\d{0,3}$/.test(t)) setBrightnessInput(t);
                     }}
                     keyboardType="number-pad"
-                    maxLength={3} 
-                    placeholder="VD: 50"
+                    maxLength={3}
+                    placeholder="0 – 100"
                     placeholderTextColor="#A0AEC0"
                     selectTextOnFocus
                     onFocus={() => {
@@ -609,6 +818,65 @@ export default function SettingsScreen() {
               <TouchableOpacity
                 style={styles.modalBottomButton}
                 onPress={handleSaveWifi}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.modalBottomButtonTextSubmit}>Kết nối</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal nhập mật khẩu Wi-Fi qua Bluetooth */}
+      <Modal
+        visible={showBlePasswordModal}
+        transparent
+        animationType="fade"
+        onRequestClose={closeBlePasswordModal}
+      >
+        <Pressable style={styles.modalOverlay} onPress={closeBlePasswordModal}>
+          <Pressable style={styles.passwordModal} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="bluetooth" size={22} color="#1F5CA9" />
+              <Text style={styles.modalTitle} numberOfLines={1}>{bleSelectedSsid}</Text>
+            </View>
+            <Text style={styles.fieldLabel}>Mật khẩu</Text>
+            <View style={styles.inputWithIcon}>
+              <TextInput
+                style={styles.inputInner}
+                placeholder="Nhập mật khẩu Wi-Fi"
+                placeholderTextColor="#A0AEC0"
+                value={blePassword}
+                onChangeText={setBlePassword}
+                secureTextEntry={!bleShowPassword}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoFocus
+              />
+              <TouchableOpacity
+                style={styles.eyeInner}
+                onPress={() => setBleShowPassword(p => !p)}
+                activeOpacity={0.6}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons
+                  name={bleShowPassword ? 'eye-off-outline' : 'eye-outline'}
+                  size={19}
+                  color="#7A8FAD"
+                />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalBottomButton}
+                onPress={closeBlePasswordModal}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.modalBottomButtonTextCancel}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalBottomButton}
+                onPress={handleGuiWifiBLE}
                 activeOpacity={0.7}
               >
                 <Text style={styles.modalBottomButtonTextSubmit}>Kết nối</Text>
@@ -791,11 +1059,12 @@ const styles = StyleSheet.create({
   wifiItemName: { flex: 1, fontSize: 14, fontWeight: '500', color: '#11181C' },
   wifiItemNameActive: { color: '#1F5CA9', fontWeight: '700' },
   wifiItemBadge: {
-    backgroundColor: '#ffffff', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderColor: '#1F5CA9', borderWidth: 1, marginLeft: 6,
+    backgroundColor: '#DCEDFF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20,
   },
   wifiItemBadgeText: { fontSize: 11, fontWeight: '600', color: '#1F5CA9' },
   noWifiText: { textAlign: 'center', color: '#7A8FAD', fontSize: 13, marginTop: 16, marginBottom: 4 },
 
+  // Connecting banner
   connectingBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: '#1F5CA9', borderRadius: 10, padding: 12, marginTop: 12,

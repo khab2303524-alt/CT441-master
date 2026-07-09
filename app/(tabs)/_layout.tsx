@@ -3,15 +3,20 @@ import React from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
+  // Chiều cao "nội dung" mong muốn của tab bar (icon + label), chưa tính safe area
+  const CONTENT_HEIGHT = 78;
+
   return (
     <Tabs
       screenOptions={{
         tabBarStyle: {
-          height: 70,
-          paddingBottom: 12,
-          paddingTop: 8,
+          height: CONTENT_HEIGHT + insets.bottom,
+          paddingBottom: Math.max(insets.bottom, 16),
+          paddingTop: 12,
           backgroundColor: '#ffffff',
           borderTopWidth: 0,
           elevation: 5,
@@ -19,6 +24,18 @@ export default function TabLayout() {
           shadowOffset: { width: 0, height: -2 },
           shadowOpacity: 0.1,
           shadowRadius: 3,
+        },
+        tabBarItemStyle: {
+          justifyContent: 'center',
+          alignItems: 'center',
+        },
+        tabBarIconStyle: {
+          marginBottom: 2,
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: '600',
+          marginTop: 2,
         },
 
         tabBarActiveTintColor: '#1F5CA9',
