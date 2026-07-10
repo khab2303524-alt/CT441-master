@@ -19,6 +19,7 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
 
    ```bash
    eas build --platform android --profile preview
+   eas build --platform android --profile development
    ```   
 
 ## Get a fresh project
