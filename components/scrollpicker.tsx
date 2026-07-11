@@ -11,6 +11,7 @@ interface ScrollPickerProps {
   itemHeight?: number;
   visibleItems?: number;
   pickerWidth?: number;
+  onScrollStateChange?: (isScrolling: boolean) => void;
 }
 
 const REPEATS = 21;
@@ -23,6 +24,7 @@ export default function ScrollPicker({
   itemHeight = 50,
   visibleItems = 3,
   pickerWidth = 75,
+  onScrollStateChange,
 }: ScrollPickerProps) {
   const optLen = options.length;
 
@@ -96,6 +98,14 @@ export default function ScrollPicker({
     );
   }, [itemHeight]);
 
+  const handleScrollStart = useCallback(() => {
+    onScrollStateChange?.(true);
+  }, [onScrollStateChange]);
+
+  const handleScrollEnd = useCallback(() => {
+    onScrollStateChange?.(false);
+  }, [onScrollStateChange]);
+
   return (
     <VirtualizedWheelPicker
       data={data}
@@ -108,6 +118,11 @@ export default function ScrollPicker({
       overlayItemStyle={{ marginHorizontal: 5}}
       enableScrollByTapOnItem
       renderItem={renderItem as any}
+      // @ts-ignore - private props exposed by the library to detect the exact
+      // moment scrolling starts / when the value has settled (scroll end)
+      _onScrollStart={handleScrollStart}
+      // @ts-ignore
+      _onScrollEnd={handleScrollEnd}
     />
   );
 }

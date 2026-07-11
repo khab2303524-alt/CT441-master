@@ -59,6 +59,11 @@ export default function ScheduleScreen() {
   const [alarmHour, setAlarmHour] = useState(7);
   const [alarmMinute, setAlarmMinute] = useState(0);
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
+  const [pickerScrollingCount, setPickerScrollingCount] = useState(0);
+  const isPickerScrolling = pickerScrollingCount > 0;
+  const handlePickerScrollStateChange = (scrolling: boolean) => {
+    setPickerScrollingCount((count) => Math.max(0, count + (scrolling ? 1 : -1)));
+  };
   const [feedbackModal, setFeedbackModal] = useState<{
     visible: boolean;
     type: 'success' | 'error';
@@ -331,6 +336,7 @@ export default function ScheduleScreen() {
     setAlarmMinute(0);
     setNote('');
     setSelectedDays([]);
+    setPickerScrollingCount(0);
     setShowModal(true);
   };
 
@@ -342,6 +348,7 @@ export default function ScheduleScreen() {
     setSelectedDays([...item.days]);
     setEditTargetId(item.id);
     setIsEditMode(true);
+    setPickerScrollingCount(0);
     setShowModal(true);
   };
 
@@ -677,6 +684,7 @@ export default function ScheduleScreen() {
                         options={Array.from({ length: 24 }, (_, i) => i)}
                         selectedValue={alarmHour}
                         onValueChange={setAlarmHour}
+                        onScrollStateChange={handlePickerScrollStateChange}
                       />
                     </View>
                   </View>
@@ -688,6 +696,7 @@ export default function ScheduleScreen() {
                         options={Array.from({ length: 60 }, (_, i) => i)}
                         selectedValue={alarmMinute}
                         onValueChange={setAlarmMinute}
+                        onScrollStateChange={handlePickerScrollStateChange}
                       />
                     </View>
                   </View>
@@ -717,8 +726,9 @@ export default function ScheduleScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 activeOpacity={0.7}
-                style={styles.modalBottomButton}
+                style={[styles.modalBottomButton, isPickerScrolling && styles.modalBottomButtonDisabled]}
                 onPress={handleSubmit}
+                disabled={isPickerScrolling}
               >
                 <Text style={styles.modalBottomButtonTextSubmit}>Xong</Text>
               </TouchableOpacity>
@@ -1029,6 +1039,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24, paddingBottom: 20, paddingTop: 5, backgroundColor: '#FFFFFF',
   },
   modalBottomButton: { paddingVertical: 10, paddingHorizontal: 16 },
+  modalBottomButtonDisabled: { opacity: 0.4 },
   modalBottomButtonTextCancel: { fontSize: 16, fontWeight: '700', color: '#000000' },
   modalBottomButtonTextSubmit: { fontSize: 16, fontWeight: '700', color: '#1F5CA9' },
 } as any);

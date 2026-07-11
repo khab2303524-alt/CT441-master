@@ -273,9 +273,6 @@ export default function SettingsScreen() {
 
           const base64Payload = Buffer.from(rawPayload, 'utf-8').toString('base64');
 
-          console.log('RAW:', rawPayload);
-          console.log('BASE64:', base64Payload);
-
           await connectedDevice.writeCharacteristicWithResponseForService(
             SERVICE_UUID,
             CHARACTERISTIC_UUID,
@@ -508,17 +505,27 @@ export default function SettingsScreen() {
                     <View style={styles.wifiList}>
                       {danhSachWifi.map((item, idx) => {
                         const isSelected = item.ssid === currentSsid;
-                        const signalColor = isSelected ? '#1F5CA9' : '#4A5568';
+                        const isSelectedOffline = isSelected && !thietBiOnline;
+                        const signalColor = isSelected ? (thietBiOnline ? '#1F5CA9' : '#64748B') : '#4A5568';
                         return (
                           <TouchableOpacity
                             key={idx}
-                            style={[styles.wifiItem, isSelected && styles.wifiItemActive]}
+                            style={[
+                              styles.wifiItem,
+                              isSelected && (isSelectedOffline ? styles.wifiItemActiveOffline : styles.wifiItemActive),
+                            ]}
                             onPress={() => handleChonWifi(item)}
                             activeOpacity={0.7}
                             disabled={dangKiemTra}
                           >
                             <Ionicons name="wifi" size={20} color={signalColor} />
-                            <Text style={[styles.wifiItemName, isSelected && styles.wifiItemNameActive]} numberOfLines={1}>
+                            <Text
+                              style={[
+                                styles.wifiItemName,
+                                isSelected && (isSelectedOffline ? styles.wifiItemNameOffline : styles.wifiItemNameActive),
+                              ]}
+                              numberOfLines={1}
+                            >
                               {item.ssid}
                             </Text>
                             {isSelected && (
@@ -543,8 +550,18 @@ export default function SettingsScreen() {
             </View>
           </Pressable>
           {!thietBiOnline && (
-            <View style={styles.offlineBanner}>
-              <Text style={styles.offlineBannerText}>Mất kết nối, thử kiểm tra lại Wi-Fi hoặc dùng tính năng gửi Wi-Fi qua Bluetooth.</Text>
+            <View style={styles.offlineCard}>
+              <View style={styles.offlineCardHeader}>
+                <View style={styles.offlineIconBox}>
+                  <Ionicons name="warning" size={20} color="#DC2626" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.offlineCardTitle}>Mất kết nối</Text>
+                  <Text style={styles.offlineCardSubtitle}>
+                    Thử kiểm tra lại Wi-Fi hoặc dùng tính năng gửi Wi-Fi qua Bluetooth.
+                  </Text>
+                </View>
+              </View>
             </View>
           )}
           {/* Card Cấu hình độc lập qua Bluetooth BLE */}
@@ -971,13 +988,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff', gap: 10, borderBottomWidth: 1, borderBottomColor: '#F0F4FA',
   },
   wifiItemActive: { backgroundColor: '#F0F7FF' },
+  wifiItemActiveOffline: { backgroundColor: '#F1F5F9' },
   wifiItemName: { flex: 1, fontSize: 14, fontWeight: '500', color: '#11181C' },
   wifiItemNameActive: { color: '#1F5CA9', fontWeight: '700' },
+  wifiItemNameOffline: { color: '#64748B', fontWeight: '700' },
   wifiItemBadge: {
     backgroundColor: '#ffffff', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderColor: '#1F5CA9', borderWidth: 1, marginLeft: 6,
   },
   wifiItemBadgeText: { fontSize: 11, fontWeight: '600', color: '#1F5CA9' },
-  wifiItemBadgeOffline: { borderColor: '#94A3B8', backgroundColor: '#ffffff' },
+  wifiItemBadgeOffline: { borderColor: '#94A3B8', backgroundColor: '#F1F5F9' },
   wifiItemBadgeTextOffline: { color: '#64748B' },
   noWifiText: { textAlign: 'center', color: '#7A8FAD', fontSize: 13, marginTop: 16, marginBottom: 4 },
 
@@ -1003,22 +1022,19 @@ const styles = StyleSheet.create({
   modalBottomButton: { paddingVertical: 10, paddingHorizontal: 10 },
   modalBottomButtonTextCancel: { fontSize: 14, fontWeight: '700', color: '#000000' },
   modalBottomButtonTextSubmit: { fontSize: 14, fontWeight: '700', color: '#1F5CA9' },
-  offlineBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    backgroundColor: '#ffffff',
-    borderWidth: 1.5,
-    borderColor: '#94A3B8',
-    borderRadius: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
+  offlineCard: {
+    backgroundColor: '#FEF2F2', borderRadius: 20, overflow: 'hidden',
+    elevation: 2, shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8,
   },
-  offlineBannerText: {
-    color: '#64748B',
-    fontSize: 13,
-    fontWeight: '700',
-    textAlign: 'justify',
+  offlineCardHeader: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 16, gap: 12,
   },
+  offlineIconBox: {
+    width: 40, height: 40, borderRadius: 12,
+    backgroundColor: '#FEE2E2', alignItems: 'center', justifyContent: 'center',
+  },
+  offlineCardTitle: { fontSize: 16, fontWeight: '700', color: '#B91C1C' },
+  offlineCardSubtitle: { fontSize: 12, color: '#DC2626', marginTop: 2 },
 } as any);

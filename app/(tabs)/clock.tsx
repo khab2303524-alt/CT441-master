@@ -30,6 +30,11 @@ export default function ClockScreen() {
   const [editNgay, setEditNgay] = useState(1);
   const [editThang, setEditThang] = useState(1);
   const [editNam, setEditNam] = useState(2024);
+  const [pickerScrollingCount, setPickerScrollingCount] = useState(0);
+  const isPickerScrolling = pickerScrollingCount > 0;
+  const handlePickerScrollStateChange = (scrolling: boolean) => {
+    setPickerScrollingCount((count) => Math.max(0, count + (scrolling ? 1 : -1)));
+  };
   const isESPConnected = useESPConnection();
   const timeData = useESPTime();
   const { showSuccess, showError } = useCustomAlert();
@@ -84,6 +89,7 @@ export default function ClockScreen() {
       setEditNam(timeData.Nam);
     }
     setActiveTab('gio');
+    setPickerScrollingCount(0);
     setEditModalVisible(true);
   };
 
@@ -237,6 +243,7 @@ export default function ClockScreen() {
                           options={Array.from({ length: 24 }, (_, i) => i)}
                           selectedValue={editHours}
                           onValueChange={setEditHours}
+                          onScrollStateChange={handlePickerScrollStateChange}
                         />
                       </View>
                     </View>
@@ -250,6 +257,7 @@ export default function ClockScreen() {
                           options={Array.from({ length: 60 }, (_, i) => i)}
                           selectedValue={editMinutes}
                           onValueChange={setEditMinutes}
+                          onScrollStateChange={handlePickerScrollStateChange}
                         />
                       </View>
                     </View>
@@ -263,6 +271,7 @@ export default function ClockScreen() {
                           options={Array.from({ length: 60 }, (_, i) => i)}
                           selectedValue={editSeconds}
                           onValueChange={setEditSeconds}
+                          onScrollStateChange={handlePickerScrollStateChange}
                         />
                       </View>
                     </View>
@@ -292,6 +301,7 @@ export default function ClockScreen() {
                           options={Array.from({ length: daysInMonth(editThang, editNam) }, (_, i) => i + 1)}
                           selectedValue={editNgay}
                           onValueChange={setEditNgay}
+                          onScrollStateChange={handlePickerScrollStateChange}
                         />
                       </View>
                     </View>
@@ -311,6 +321,7 @@ export default function ClockScreen() {
                             const max = daysInMonth(val, editNam);
                             if (editNgay > max) setEditNgay(max);
                           }}
+                          onScrollStateChange={handlePickerScrollStateChange}
                         />
                       </View>
                     </View>
@@ -332,6 +343,7 @@ export default function ClockScreen() {
                             const max = daysInMonth(editThang, val);
                             if (editNgay > max) setEditNgay(max);
                           }}
+                          onScrollStateChange={handlePickerScrollStateChange}
                         />
                       </View>
                     </View>
@@ -356,8 +368,9 @@ export default function ClockScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 activeOpacity={0.7}
-                style={styles.modalBottomButton}
+                style={[styles.modalBottomButton, isPickerScrolling && styles.modalBottomButtonDisabled]}
                 onPress={activeTab === 'gio' ? saveTime : saveDate}
+                disabled={isPickerScrolling}
               >
                 <Text style={styles.modalBottomButtonTextSubmit}>Xong</Text>
               </TouchableOpacity>
@@ -506,6 +519,7 @@ const styles = StyleSheet.create({
 
   modalBottomActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingBottom: 20, paddingTop: 5, backgroundColor: '#FFFFFF' },
   modalBottomButton: { paddingVertical: 10, paddingHorizontal: 16 },
+  modalBottomButtonDisabled: { opacity: 0.4 },
   modalBottomButtonTextCancel: { fontSize: 16, fontWeight: '700', color: '#000000' },
   modalBottomButtonTextSubmit: { fontSize: 16, fontWeight: '700', color: '#1F5CA9' },
 
