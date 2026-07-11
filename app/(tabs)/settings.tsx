@@ -340,6 +340,14 @@ export default function SettingsScreen() {
     } catch (e: any) { showError('Lỗi Firebase', e.message); }
   };
 
+  const handleCancelBle = () => {
+    Keyboard.dismiss();
+    setBleSsid('');
+    setBlePassword('');
+    setShowBlePassword(false);
+    setExpandedCard(null);
+  };
+
   const handleCancelBrightness = () => {
     Keyboard.dismiss();
     setBrightnessInput(String(savedBrightness));
@@ -516,8 +524,8 @@ export default function SettingsScreen() {
                   <Ionicons name="bluetooth" size={20} color="#1F5CA9" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.cardTitle}>Cấu hình cứu hộ qua BLE</Text>
-                  <Text style={styles.cardSubtitle}>Gửi Wi-Fi trực tiếp không qua Internet</Text>
+                  <Text style={styles.cardTitle}>Gửi Wi-Fi qua Bluetooth</Text>
+                  <Text style={styles.cardSubtitle}>Dùng khi không kết nối được Wi-Fi trước đó</Text>
                 </View>
                 <Ionicons
                   name="chevron-down"
@@ -529,12 +537,12 @@ export default function SettingsScreen() {
 
               {expandedCard === 'ble' && (
                 <View style={styles.cardBody}>
-                  <Text style={styles.tuneFieldLabel}>Tên Wi-Fi (SSID)</Text>
+                  <Text style={styles.tuneFieldLabel}>Tên Wi-Fi</Text>
                   <TextInput
                     style={styles.tuneInput}
                     value={bleSsid}
                     onChangeText={setBleSsid}
-                    placeholder="Nhập chính xác tên Wi-Fi"
+                    placeholder="Nhập tên Wi-Fi"
                     placeholderTextColor="#A0AEC0"
                   />
 
@@ -564,34 +572,29 @@ export default function SettingsScreen() {
                   </View>
 
                   <Text style={[styles.tuneHintText, { marginTop: 12 }]}>
-                    * Tính năng này dùng khi đồng hồ hoàn toàn mất mạng (báo Offline trên App), giúp điện thoại kết nối Bluetooth trực tiếp để cứu hộ phần cứng.
+                    Tính năng này dùng khi đồng hồ không thể kết nối Wi-Fi trước đó, lúc này phải gửi Wi-Fi thông qua Bluetooth để kết nối với Wi-Fi mới.
                   </Text>
 
-                  <View style={{ marginTop: 16, alignItems: 'flex-end' }}>
+                  <View style={styles.tuneBottomActions}>
                     <TouchableOpacity
-                      style={[
-                        styles.tuneBottomButton,
-                        {
-                          backgroundColor: '#1F5CA9',
-                          paddingHorizontal: 20,
-                          borderRadius: 10,
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          gap: 8
-                        }
-                      ]}
-                      onPress={handleConfigViaBluetooth}
-                      disabled={dangKetNoiBle}
+                      style={styles.tuneBottomButton}
+                      onPress={handleCancelBle}
                       activeOpacity={0.7}
+                      disabled={dangKetNoiBle}
+                    >
+                      <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.tuneBottomButton}
+                      onPress={handleConfigViaBluetooth}
+                      activeOpacity={0.7}
+                      disabled={dangKetNoiBle}
                     >
                       {dangKetNoiBle ? (
-                        <ActivityIndicator size="small" color="#ffffff" />
+                        <ActivityIndicator size="small" color="#1F5CA9" />
                       ) : (
-                        <Ionicons name="send" size={14} color="#ffffff" />
+                        <Text style={styles.tuneBottomButtonTextSubmit}>Kết nối</Text>
                       )}
-                      <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 14 }}>
-                        {dangKetNoiBle ? 'Đang nạp...' : 'Bắt đầu nạp dữ liệu'}
-                      </Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -786,11 +789,11 @@ export default function SettingsScreen() {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.modalBottomButton, { backgroundColor: '#1F5CA9', borderRadius: 10, paddingHorizontal: 16 }]}
+                style={styles.modalBottomButton}
                 onPress={handleSaveWifi}
                 activeOpacity={0.7}
               >
-                <Text style={[styles.modalBottomButtonTextSubmit, { color: '#ffffff' }]}>Gửi Cloud</Text>
+                <Text style={styles.modalBottomButtonTextSubmit}>Kết nối</Text>
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -857,7 +860,7 @@ const styles = StyleSheet.create({
   inputInner: {
     flex: 1,
     paddingVertical: 11,
-    fontSize: 15,
+    fontSize: 13,
     color: '#11181C',
   },
   eyeInner: {
