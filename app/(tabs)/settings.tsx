@@ -92,6 +92,7 @@ export default function SettingsScreen() {
   const [statusText, setStatusText] = useState('Đang kiểm tra...');
   const trangThaiUnsub = useRef<(() => void) | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bleDeviceFoundRef = useRef(false);
 
   const [brightness, setBrightness] = useState(200);
   const [savedBrightness, setSavedBrightness] = useState(200);
@@ -231,7 +232,7 @@ export default function SettingsScreen() {
           if (val === 'thanhCong') {
             showSuccess('Kết nối thành công', 'Đã kết nối Wi-Fi mới.\nThiết bị sẽ tự khởi động lại.');
           } else if (val === 'thatBai') {
-            showError('Kết nối thất bại', 'Sai mật khẩu hoặc không tìm thấy mạng.\nTiếp tục dùng Wi-Fi cũ.');
+            showError('Kết nối thất bại', 'Sai mật khẩu hoặc không tìm thấy mạng. Tiếp tục dùng Wi-Fi cũ.');
           }
         } catch (_) { }
       }, 1500);
@@ -248,6 +249,7 @@ export default function SettingsScreen() {
       return;
     }
 
+    bleDeviceFoundRef.current = false;
     setDangKetNoiBle(true);
     showSuccess('Đang kết nối BLE', 'Đưa điện thoại lại gần đồng hồ và bật Bluetooth + Location...');
 
@@ -260,6 +262,7 @@ export default function SettingsScreen() {
       }
 
       if (device && (device.name === 'WIFI_SETUP' || device.localName === 'WIFI_SETUP')) {
+        bleDeviceFoundRef.current = true;
         bleManager.stopDeviceScan();
 
         try {
@@ -302,8 +305,14 @@ export default function SettingsScreen() {
 
     setTimeout(() => {
       bleManager.stopDeviceScan();
-      setDangKetNoiBle(false);
-    }, 12000);
+      if (!bleDeviceFoundRef.current) {
+        setDangKetNoiBle(false);
+        showError(
+          'Không tìm thấy thiết bị',
+          'Không tìm thấy đồng hồ qua Bluetooth. Thiết bị có thể chưa chuyển sang chế độ dự phòng BLE, vui lòng đợi thêm ít phút rồi thử lại.'
+        );
+      }
+    }, 20000);
   };
 
   const handleQuetWifi = async () => {
@@ -439,11 +448,6 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Pressable style={styles.body} onPress={closeAdjustCards}>
-          {!thietBiOnline && (
-            <View style={styles.offlineBanner}>
-              <Text style={styles.offlineBannerText}>Mất kết nối thiết bị. Nếu đã có nguồn điện, thử kiểm tra lại Wi-Fi hoặc dùng tính năng gửi Wi-Fi qua Bluetooth bên dưới.</Text>
-            </View>
-          )}
           {/* Card Wi-Fi */}
           <Pressable onPress={(e) => e.stopPropagation()}>
             <View style={styles.card}>
@@ -518,8 +522,10 @@ export default function SettingsScreen() {
                               {item.ssid}
                             </Text>
                             {isSelected && (
-                              <View style={styles.wifiItemBadge}>
-                                <Text style={styles.wifiItemBadgeText}>Đã kết nối</Text>
+                              <View style={[styles.wifiItemBadge, !thietBiOnline && styles.wifiItemBadgeOffline]}>
+                                <Text style={[styles.wifiItemBadgeText, !thietBiOnline && styles.wifiItemBadgeTextOffline]}>
+                                  {thietBiOnline ? 'Đã kết nối' : 'Mất kết nối'}
+                                </Text>
                               </View>
                             )}
                             <Ionicons name="chevron-forward" size={16} color="#C8D3E8" style={{ marginLeft: 'auto' }} />
@@ -536,7 +542,11 @@ export default function SettingsScreen() {
               )}
             </View>
           </Pressable>
-
+          {!thietBiOnline && (
+            <View style={styles.offlineBanner}>
+              <Text style={styles.offlineBannerText}>Mất kết nối, thử kiểm tra lại Wi-Fi hoặc dùng tính năng gửi Wi-Fi qua Bluetooth.</Text>
+            </View>
+          )}
           {/* Card Cấu hình độc lập qua Bluetooth BLE */}
           <Pressable onPress={(e) => e.stopPropagation()}>
             <View style={styles.card}>
@@ -565,7 +575,6 @@ export default function SettingsScreen() {
                   <Text style={styles.tuneFieldLabel}>Tên Wi-Fi</Text>
                   <TextInput
                     style={styles.tuneInput}
-                    value={bleSsid}
                     onChangeText={setBleSsid}
                     placeholder="Nhập tên Wi-Fi"
                     placeholderTextColor="#A0AEC0"
@@ -577,7 +586,6 @@ export default function SettingsScreen() {
                       style={styles.inputInner}
                       placeholder="Nhập mật khẩu Wi-Fi"
                       placeholderTextColor="#A0AEC0"
-                      value={blePassword}
                       onChangeText={setBlePassword}
                       secureTextEntry={!showBlePassword}
                       autoCapitalize="none"
@@ -934,7 +942,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   tuneHintText: {
-    fontSize: 12,
+    fontSize: 13,
     color: '#64748B',
     marginTop: 10,
     lineHeight: 18,
@@ -969,6 +977,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderColor: '#1F5CA9', borderWidth: 1, marginLeft: 6,
   },
   wifiItemBadgeText: { fontSize: 11, fontWeight: '600', color: '#1F5CA9' },
+  wifiItemBadgeOffline: { borderColor: '#94A3B8', backgroundColor: '#ffffff' },
+  wifiItemBadgeTextOffline: { color: '#64748B' },
   noWifiText: { textAlign: 'center', color: '#7A8FAD', fontSize: 13, marginTop: 16, marginBottom: 4 },
 
   connectingBanner: {
@@ -1000,14 +1010,14 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     backgroundColor: '#ffffff',
     borderWidth: 1.5,
-    borderColor: '#D9534F',
+    borderColor: '#94A3B8',
     borderRadius: 20,
     paddingVertical: 10,
     paddingHorizontal: 20,
   },
   offlineBannerText: {
-    color: '#D9534F',
-    fontSize: 14,
+    color: '#64748B',
+    fontSize: 13,
     fontWeight: '700',
     textAlign: 'justify',
   },
