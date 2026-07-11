@@ -134,6 +134,9 @@ export default function ScheduleScreen() {
         const loadedSchedule: ScheduleItem[] = [];
         Object.keys(data).forEach((key) => {
           const alarm = data[key];
+          // Bỏ qua entry sentinel/placeholder (chỉ dùng để giữ node dsBaoThuc
+          // luôn là JSON object hợp lệ cho firmware, không phải báo thức thật)
+          if (alarm && alarm.placeholder) return;
           if (alarm && typeof alarm.gio === 'number' && typeof alarm.phut === 'number') {
             const match = key.match(/\d+/);
             const idNum = match ? parseInt(match[0], 10) : loadedSchedule.length + 1;
@@ -200,6 +203,28 @@ export default function ScheduleScreen() {
         note: item.note || '',
       };
     });
+
+    // Firebase RTDB tự xoá object rỗng ({}) khỏi node khi danh sách trống,
+    // khiến /DongHo/dsBaoThuc trở thành null trên Firebase. Firmware ESP32 chỉ
+    // tự reset từng báo thức về mặc định khi node là JSON object hợp lệ
+    // (dataTypeEnum == json); nếu node là null, logic reset per-index có sẵn
+    // trong firmware không có cơ hội chạy -> báo thức cũ bị kẹt "active" mãi
+    // trong bộ nhớ local của ESP32, icon báo thức không bao giờ tắt.
+    // Ta KHÔNG sửa firmware, mà giữ node luôn là object bằng cách ghi thêm 1
+    // entry sentinel (đánh dấu placeholder: true) khi danh sách rỗng. Entry
+    // này bị lọc bỏ ở phần đọc dữ liệu bên trên nên không hiện ra như báo
+    // thức thật trong danh sách của app.
+    if (updatedList.length === 0) {
+      alarmObjects['BaoThuc1'] = {
+        active: false,
+        gio: 0,
+        phut: 0,
+        thu: [-1],
+        note: '',
+        placeholder: true,
+      };
+    }
+
     set(ref(db, 'DongHo/dsBaoThuc'), alarmObjects)
       .catch((error) => showError('Lỗi Firebase', error.message));
   };
@@ -238,27 +263,35 @@ export default function ScheduleScreen() {
     else switchToSchedule();
   };
 
+  // ── TOGGLE CHUÔNG THỦ CÔNG ──
+  // Bấm lần 1: bật chuông (ghi true lên Firebase)
+  // Bấm lần 2: tắt chuông (ghi false lên Firebase)
   const ringBellNow = () => {
-    if (bellRinging) return;
-    setBellRinging(true);
-    set(ref(db, 'DongHo/ChuongThuCong'), true)
-      .then(() => {
-        Animated.sequence([
-          Animated.timing(bellScaleAnim, { toValue: 1.12, duration: 100, useNativeDriver: true }),
-          Animated.timing(bellScaleAnim, { toValue: 0.94, duration: 80, useNativeDriver: true }),
-          Animated.timing(bellScaleAnim, { toValue: 1.08, duration: 80, useNativeDriver: true }),
-          Animated.timing(bellScaleAnim, { toValue: 1, duration: 120, useNativeDriver: true }),
-        ]).start();
-        setTimeout(() => {
-          set(ref(db, 'DongHo/ChuongThuCong'), false)
-            .catch(() => { })
-            .finally(() => setBellRinging(false));
-        }, 3000);
-      })
-      .catch((err) => {
-        showError('Lỗi', err.message);
-        setBellRinging(false);
-      });
+    if (!bellRinging) {
+      setBellRinging(true);
+      set(ref(db, 'DongHo/ChuongThuCong'), true)
+        .then(() => {
+          Animated.sequence([
+            Animated.timing(bellScaleAnim, { toValue: 1.12, duration: 100, useNativeDriver: true }),
+            Animated.timing(bellScaleAnim, { toValue: 0.94, duration: 80, useNativeDriver: true }),
+            Animated.timing(bellScaleAnim, { toValue: 1.08, duration: 80, useNativeDriver: true }),
+            Animated.timing(bellScaleAnim, { toValue: 1, duration: 120, useNativeDriver: true }),
+          ]).start();
+        })
+        .catch((err) => {
+          showError('Lỗi', err.message);
+          setBellRinging(false);
+        });
+    } else {
+      set(ref(db, 'DongHo/ChuongThuCong'), false)
+        .then(() => {
+          setBellRinging(false);
+          Animated.timing(bellScaleAnim, { toValue: 1, duration: 120, useNativeDriver: true }).start();
+        })
+        .catch((err) => {
+          showError('Lỗi', err.message);
+        });
+    }
   };
 
   const toggleDay = useCallback((day: number) => {
@@ -373,9 +406,6 @@ export default function ScheduleScreen() {
           <Text style={styles.headerTitle}>
             {activeTab === 'schedule' ? 'Hẹn giờ' : 'Thủ công'}
           </Text>
-          {/* <Text style={styles.headerSubtitle}>
-            {activeTab === 'schedule' ? 'Chuông báo tự động' : 'Bật chuông báo ngay'}
-          </Text> */}
         </View>
       </View>
 
@@ -486,7 +516,7 @@ export default function ScheduleScreen() {
         <View style={styles.manualModeContainer}>
           <View style={styles.manualModeCenter}>
             <Text style={[styles.bellBtnLabel, bellRinging && styles.bellBtnLabelRinging]}>
-              {bellRinging ? 'Chuông đang reo...' : 'Nhấn để bật chuông'}
+              {bellRinging ? 'Đang reo, nhấn để tắt' : 'Nhấn để bật chuông'}
             </Text>
 
             <Animated.View style={[styles.bellShadowWrap, { transform: [{ scale: bellScaleAnim }] }]}>
@@ -494,20 +524,19 @@ export default function ScheduleScreen() {
                 style={styles.bellRingOuter}
                 onPress={ringBellNow}
                 activeOpacity={0.82}
-                disabled={bellRinging}
               >
                 <LinearGradient
-                  colors={['#22C3FF', '#0E7FC4']}
+                  colors={bellRinging ? ['#FF8A65', '#D84315'] : ['#22C3FF', '#0E7FC4']}
                   style={styles.bellRingMid}
                 >
                   <LinearGradient
-                    colors={['#2E72C4', '#173E78']}
+                    colors={bellRinging ? ['#E64A19', '#8C2F00'] : ['#2E72C4', '#173E78']}
                     style={styles.bellRingInner}
                   >
                     <FontAwesome6
                       name="bell"
                       size={74}
-                      color={bellRinging ? '#9CA3AF' : '#FFF200'}
+                      color={bellRinging ? '#FFF200' : '#FFF200'}
                     />
                   </LinearGradient>
                 </LinearGradient>
@@ -515,7 +544,7 @@ export default function ScheduleScreen() {
             </Animated.View>
           </View>
 
-          {/* Trạng thái tạm tắt - đẩy xuống đáy màn hình */}
+          {/* Trạng thái tạm tắt */}
           <View style={[
             styles.pausedBadge,
             pausedAlarmIdsRef.current.length === 0 && styles.pausedBadgeEmpty,
@@ -726,7 +755,6 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 26, fontWeight: '700', color: '#ffffff', marginBottom: 4 },
   headerSubtitle: { fontSize: 13, fontWeight: '500', color: '#ffffff' },
 
-  // ── TAB BAR ──
   tabBar: {
     flexDirection: 'row',
     backgroundColor: '#ffffff',
@@ -824,7 +852,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // ── MÀN HÌNH THỦ CÔNG ──
   manualModeContainer: {
     flex: 1,
     alignItems: 'center',
@@ -864,7 +891,6 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     fontWeight: '500',
   },
-  // Khung bọc ngoài cùng - giữ shadow (không bị cắt)
   bellShadowWrap: {
     width: 230,
     height: 230,
@@ -875,7 +901,6 @@ const styles = StyleSheet.create({
     shadowRadius: 28,
     elevation: 14,
   },
-  // Lớp ngoài
   bellRingOuter: {
     width: 230,
     height: 230,
@@ -890,7 +915,6 @@ const styles = StyleSheet.create({
     shadowColor: '#6B7280',
     shadowOpacity: 0.3,
   },
-  // Lớp giữa
   bellRingMid: {
     width: 210,
     height: 210,
@@ -899,7 +923,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  // Lớp trong
   bellRingInner: {
     width: 160,
     height: 160,
@@ -916,10 +939,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   bellBtnLabelRinging: {
-    color: '#9CA3AF',
+    color: '#D84315',
   },
 
-  // ── BOTTOM SHEET ──
   bottomSheetOverlay: { flex: 1, backgroundColor: '#00000073', justifyContent: 'flex-end' },
   bottomSheetContainer: {
     backgroundColor: '#ffffff',
@@ -967,7 +989,6 @@ const styles = StyleSheet.create({
   },
   confirmDeleteBtnText: { fontSize: 13, fontWeight: '500', color: '#ffffff' },
 
-  // ── MODAL ──
   modalOverlay: { flex: 1, backgroundColor: '#00000066', justifyContent: 'center', alignItems: 'center' },
   modalContent: {
     backgroundColor: '#FFFFFF', borderRadius: 24, width: '92%', maxWidth: 380, overflow: 'hidden',

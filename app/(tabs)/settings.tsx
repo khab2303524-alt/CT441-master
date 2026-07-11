@@ -111,6 +111,10 @@ export default function SettingsScreen() {
     setFeedbackModal({ visible: true, type: 'error', title, message });
   const hideFeedback = () => setFeedbackModal(prev => ({ ...prev, visible: false }));
 
+  const [thietBiOnline, setThietBiOnline] = useState(true);
+  const lastHeartbeatRef = useRef<number>(Date.now());
+  const tungMatKetNoiRef = useRef(false);
+
   useEffect(() => {
     const loadWifiCache = async () => {
       try {
@@ -147,7 +151,26 @@ export default function SettingsScreen() {
         setRingDurationInput(String(val));
       }
     });
-    return () => { unsubWifi(); unsubBright(); unsubRing(); };
+    const unsubHeartbeat = onValue(ref(db, 'DongHo/Heartbeat'), (snap) => {
+      if (snap.val() === null) return;
+      lastHeartbeatRef.current = Date.now();
+      if (tungMatKetNoiRef.current) {
+        tungMatKetNoiRef.current = false;
+        setThietBiOnline(true);
+        showSuccess('Đã kết nối lại', 'Thiết bị đã hoạt động trở lại.');
+      } else {
+        setThietBiOnline(true);
+      }
+    });
+
+    const heartbeatCheckInterval = setInterval(() => {
+      const daImLang = Date.now() - lastHeartbeatRef.current;
+      if (daImLang > 20000 && !tungMatKetNoiRef.current) {
+        tungMatKetNoiRef.current = true;
+        setThietBiOnline(false);
+      }
+    }, 5000);
+    return () => { unsubWifi(); unsubBright(); unsubRing(); unsubHeartbeat(); clearInterval(heartbeatCheckInterval); };
   }, []);
 
   useEffect(() => {
@@ -190,7 +213,7 @@ export default function SettingsScreen() {
       setPassword('');
       setDangKiemTra(true);
       setStatusText('Chờ thiết bị phản hồi...');
-      startTimeout(20000, 'Chưa nhận được lệnh đổi Wi-Fi.');
+      startTimeout(30000, 'Chưa nhận được lệnh đổi Wi-Fi.');
 
       const pollInterval = setInterval(async () => {
         try {
@@ -199,7 +222,7 @@ export default function SettingsScreen() {
           if (!val || val === 'choDoi') return;
           if (val === 'dangKetNoi') {
             setStatusText('Đang kết nối Wi-Fi mới...');
-            startTimeout(25000, 'Không kết nối được Wi-Fi.');
+            startTimeout(30000, 'Không kết nối được Wi-Fi.');
             return;
           }
           clearInterval(pollInterval);
@@ -216,7 +239,7 @@ export default function SettingsScreen() {
     } catch (e: any) { showError('Lỗi Firebase', e.message); }
   };
 
-  // Hàm kết nối cứu hộ độc lập bằng Bluetooth BLE lấy từ ô nhập tay
+  // Hàm kết nối bằng Bluetooth BLE lấy từ ô nhập tay
   const handleConfigViaBluetooth = () => {
     Keyboard.dismiss();
 
@@ -243,10 +266,8 @@ export default function SettingsScreen() {
           const connectedDevice = await device.connect();
           await connectedDevice.discoverAllServicesAndCharacteristics();
 
-          // 👉 Gộp dữ liệu WiFi
           const rawPayload = `${bleSsid.trim()}|${blePassword}`;
 
-          // 👉 Encode Base64 CHUẨN (fix lỗi btoa)
           const base64Payload = Buffer.from(rawPayload, 'utf-8').toString('base64');
 
           console.log('RAW:', rawPayload);
@@ -418,7 +439,11 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Pressable style={styles.body} onPress={closeAdjustCards}>
-
+          {!thietBiOnline && (
+            <View style={styles.offlineBanner}>
+              <Text style={styles.offlineBannerText}>Mất kết nối thiết bị. Nếu đã có nguồn điện, thử kiểm tra lại Wi-Fi hoặc dùng tính năng gửi Wi-Fi qua Bluetooth bên dưới.</Text>
+            </View>
+          )}
           {/* Card Wi-Fi */}
           <Pressable onPress={(e) => e.stopPropagation()}>
             <View style={styles.card}>
@@ -572,7 +597,7 @@ export default function SettingsScreen() {
                   </View>
 
                   <Text style={[styles.tuneHintText, { marginTop: 12 }]}>
-                    Tính năng này dùng khi đồng hồ không thể kết nối Wi-Fi trước đó, lúc này phải gửi Wi-Fi thông qua Bluetooth để kết nối với Wi-Fi mới.
+                    Chú ý: nhập chính xác tên Wi-Fi và mật khẩu Wi-Fi trước khi nhấn kết nối.
                   </Text>
 
                   <View style={styles.tuneBottomActions}>
@@ -710,7 +735,7 @@ export default function SettingsScreen() {
                   </View>
 
                   <Text style={styles.tuneHintText}>
-                    Chuông sẽ reo liên tục trong khoảng thời gian này mỗi khi được kích hoạt.
+                    Chuông sẽ reo trong khoảng thời gian này mỗi khi được kích hoạt.
                   </Text>
 
                   <View style={styles.tuneBottomActions}>
@@ -751,7 +776,7 @@ export default function SettingsScreen() {
               <Ionicons name="wifi" size={22} color="#1F5CA9" />
               <Text style={styles.modalTitle} numberOfLines={1}>{selectedSsid}</Text>
             </View>
-            <Text style={styles.fieldLabel}>Mật khẩu</Text>
+            <Text style={styles.tuneFieldLabel}>Mật khẩu</Text>
             <View style={styles.inputWithIcon}>
               <TextInput
                 style={styles.inputInner}
@@ -968,4 +993,22 @@ const styles = StyleSheet.create({
   modalBottomButton: { paddingVertical: 10, paddingHorizontal: 10 },
   modalBottomButtonTextCancel: { fontSize: 14, fontWeight: '700', color: '#000000' },
   modalBottomButtonTextSubmit: { fontSize: 14, fontWeight: '700', color: '#1F5CA9' },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#D9534F',
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+  },
+  offlineBannerText: {
+    color: '#D9534F',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'justify',
+  },
 } as any);
