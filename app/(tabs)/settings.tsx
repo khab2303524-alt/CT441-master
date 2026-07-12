@@ -6,6 +6,7 @@ import { get, onValue, ref, update } from 'firebase/database';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -31,21 +32,6 @@ const WIFI_CACHE_KEY = 'settings_wifi_cache_v1';
 const bleManager = new BleManager();
 const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
 const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-
-// Hàm xử lý mã hóa Base64 thủ công gọn nhẹ cho React Native
-const btoa = (input: string) => {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-  let str = input;
-  let output = '';
-  for (let block = 0, charCode, i = 0, map = chars; str.charAt(i | 0) || (map = '=', i % 1); output += map.charAt(63 & block >> 8 - i % 1 * 8)) {
-    charCode = str.charCodeAt(i += 3 / 4);
-    if (charCode > 255) {
-      throw new Error("'btoa' failed: String contains characters outside Latin1.");
-    }
-    block = block << 8 | charCode;
-  }
-  return output;
-};
 
 const normalizeWifiList = (raw: unknown): WifiItem[] => {
   if (Array.isArray(raw)) {
@@ -77,7 +63,11 @@ export default function SettingsScreen() {
   const quetPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Password modal states
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  // wifiStep điều khiển nội dung hiển thị BÊN TRONG modal wifi (list | password)
+  // thay vì dùng 1 Modal riêng cho phần nhập mật khẩu — tránh việc 2 Modal native
+  // (list & password) cùng tồn tại trong lúc transition khiến modal này đè lên modal kia
+  // thay vì đóng hẳn modal danh sách.
+  const [wifiStep, setWifiStep] = useState<'list' | 'password'>('list');
   const [selectedSsid, setSelectedSsid] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -166,12 +156,25 @@ export default function SettingsScreen() {
 
     const heartbeatCheckInterval = setInterval(() => {
       const daImLang = Date.now() - lastHeartbeatRef.current;
-      if (daImLang > 20000 && !tungMatKetNoiRef.current) {
+      if (daImLang > 45000 && !tungMatKetNoiRef.current) {
         tungMatKetNoiRef.current = true;
         setThietBiOnline(false);
       }
-    }, 5000);
-    return () => { unsubWifi(); unsubBright(); unsubRing(); unsubHeartbeat(); clearInterval(heartbeatCheckInterval); };
+    }, 3000);
+
+    // Khi app quay lại foreground (mở lại app / chuyển tab về), thời gian ở nền
+    // không được tính là "mất kết nối" thật, nên reset mốc thời gian tại đây.
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        lastHeartbeatRef.current = Date.now();
+      }
+    });
+
+    return () => {
+      unsubWifi(); unsubBright(); unsubRing(); unsubHeartbeat();
+      clearInterval(heartbeatCheckInterval);
+      appStateSub.remove();
+    };
   }, []);
 
   useEffect(() => {
@@ -203,7 +206,7 @@ export default function SettingsScreen() {
     Keyboard.dismiss();
     if (!selectedSsid.trim()) { showError('Chưa chọn Wi-Fi', 'Vui lòng quét và chọn mạng Wi-Fi'); return; }
     if (dangKiemTra) return;
-    setShowPasswordModal(false);
+    setWifiStep('list');
     try {
       await update(ref(db, 'WiFi'), {
         ssid: selectedSsid.trim(),
@@ -249,6 +252,11 @@ export default function SettingsScreen() {
       return;
     }
 
+    if (!blePassword.trim()) {
+      showError('Thiếu thông tin', 'Vui lòng nhập mật khẩu Wi-Fi.');
+      return;
+    }
+
     bleDeviceFoundRef.current = false;
     setDangKetNoiBle(true);
     showSuccess('Đang kết nối BLE', 'Đưa điện thoại lại gần đồng hồ và bật Bluetooth + Location...');
@@ -283,6 +291,7 @@ export default function SettingsScreen() {
 
           setDangKetNoiBle(false);
           setBlePassword('');
+          setExpandedCard(null);
 
           showSuccess(
             'Gửi BLE thành công',
@@ -343,11 +352,12 @@ export default function SettingsScreen() {
     setSelectedSsid(item.ssid);
     setPassword('');
     setShowPassword(false);
-    setShowPasswordModal(true);
+    setWifiStep('password');
   };
 
+  // Quay lại danh sách wifi (không đóng hẳn modal, tránh mở/đóng 2 Modal cùng lúc)
   const closePasswordModal = () => {
-    setShowPasswordModal(false);
+    setWifiStep('list');
     setPassword('');
     setShowPassword(false);
   };
@@ -384,8 +394,8 @@ export default function SettingsScreen() {
   const handleSaveRingDuration = async () => {
     Keyboard.dismiss();
     const num = parseInt(ringDurationInput, 10);
-    if (isNaN(num) || num < 1 || num > 100) {
-      showError('Giá trị không hợp lệ', 'Vui lòng nhập số từ 1 đến 100 giây');
+    if (isNaN(num) || num < 1 || num > 30) {
+      showError('Giá trị không hợp lệ', 'Vui lòng nhập số từ 1 đến 30 giây');
       return;
     }
     try {
@@ -402,13 +412,6 @@ export default function SettingsScreen() {
     setExpandedCard(null);
   };
 
-  const closeAdjustCards = () => {
-    if (expandedCard === 'brightness' || expandedCard === 'ring' || expandedCard === 'ble') {
-      Keyboard.dismiss();
-      setExpandedCard(null);
-    }
-  };
-
   const parsedBrightnessInput = parseInt(brightnessInput, 10);
   const brightnessChanged = !isNaN(parsedBrightnessInput) && parsedBrightnessInput !== savedBrightness;
 
@@ -419,6 +422,7 @@ export default function SettingsScreen() {
 
   const toggleCard = (card: 'wifi' | 'brightness' | 'ring' | 'ble') => {
     Keyboard.dismiss();
+    if (card === 'wifi') setWifiStep('list');
     setExpandedCard(prev => {
       const next = prev === card ? null : card;
       return next;
@@ -444,7 +448,7 @@ export default function SettingsScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Pressable style={styles.body} onPress={closeAdjustCards}>
+        <View style={styles.body}>
           {/* Card Wi-Fi */}
           <Pressable onPress={(e) => e.stopPropagation()}>
             <View style={styles.card}>
@@ -466,16 +470,117 @@ export default function SettingsScreen() {
                     <Text style={styles.cardSubtitle}>Chưa cấu hình</Text>
                   )}
                 </View>
-                <Ionicons
-                  name="chevron-down"
-                  size={20}
-                  color="#7A8FAD"
-                  style={{ transform: [{ rotate: expandedCard === 'wifi' ? '180deg' : '0deg' }] }}
-                />
               </TouchableOpacity>
+            </View>
+          </Pressable>
+          {!thietBiOnline && (
+            <View style={styles.offlineCard}>
+              <View style={styles.offlineCardHeader}>
+                <View style={styles.offlineIconBox}>
+                  <Ionicons name="warning" size={20} color="#DC2626" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.offlineCardTitle}>Mất kết nối</Text>
+                  <Text style={styles.offlineCardSubtitle}>
+                    Thử kiểm tra lại Wi-Fi hoặc dùng tính năng gửi Wi-Fi qua Bluetooth.
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
+          {/* Card Cấu hình độc lập qua Bluetooth BLE */}
+          <Pressable onPress={(e) => e.stopPropagation()}>
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.cardHeader}
+                onPress={() => toggleCard('ble')}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.cardIconBox, { backgroundColor: '#E2F1FF' }]}>
+                  <Ionicons name="bluetooth" size={20} color="#1F5CA9" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>Gửi Wi-Fi qua Bluetooth</Text>
+                  <Text style={styles.cardSubtitle}>Dùng khi không kết nối được Wi-Fi trước đó</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
 
-              {expandedCard === 'wifi' && (
-                <View style={styles.cardBody}>
+          {/* Card Độ sáng */}
+          <Pressable onPress={(e) => e.stopPropagation()}>
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.cardHeader}
+                onPress={() => toggleCard('brightness')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.cardIconBox}>
+                  <Ionicons name="sunny" size={20} color="#1F5CA9" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>Độ sáng LED</Text>
+                  <Text style={styles.cardSubtitle}>Hiện tại: {brightness}</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+
+          {/* Card Thời gian chuông reo */}
+          <Pressable onPress={(e) => e.stopPropagation()}>
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.cardHeader}
+                onPress={() => toggleCard('ring')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.cardIconBox}>
+                  <FontAwesome6 name="bell" size={18} color="#1F5CA9" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>Thời gian chuông reo</Text>
+                  <Text style={styles.cardSubtitle}>Hiện tại: {ringDuration} giây</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </View>
+      </ScrollView>
+
+      {/* Modal: Kết nối Wi-Fi (gộp 2 bước "danh sách" và "nhập mật khẩu" trong CÙNG 1 Modal
+          để tránh việc 2 Modal native mở/đóng cùng lúc gây đè chồng lên nhau) */}
+      <Modal
+        visible={expandedCard === 'wifi'}
+        transparent
+        animationType="fade"
+        onRequestClose={() => (wifiStep === 'password' ? closePasswordModal() : setExpandedCard(null))}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => (wifiStep === 'password' ? closePasswordModal() : setExpandedCard(null))}
+        >
+          <Pressable
+            style={wifiStep === 'list' ? styles.settingsModal : styles.passwordModal}
+            onPress={(e) => e.stopPropagation()}
+          >
+            {wifiStep === 'list' ? (
+              <>
+                <View style={styles.modalHeader}>
+                  <Ionicons name="wifi" size={22} color="#1F5CA9" />
+                  <Text style={styles.modalTitle} numberOfLines={1}>Kết nối Wi-Fi</Text>
+                  <TouchableOpacity
+                    onPress={() => setExpandedCard(null)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="close" size={22} color="#7A8FAD" />
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView
+                  style={styles.settingsModalScroll}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                >
                   <View style={styles.scanRow}>
                     <Text style={styles.scanRowLabel}>Mạng lân cận</Text>
                     <TouchableOpacity
@@ -545,305 +650,267 @@ export default function SettingsScreen() {
                   {!dangQuet && daCo1LanQuet && danhSachWifi.length === 0 && (
                     <Text style={styles.noWifiText}>Không tìm thấy mạng Wi-Fi nào.</Text>
                   )}
+                </ScrollView>
+              </>
+            ) : (
+              <>
+                <View style={styles.modalHeader}>
+                  <TouchableOpacity
+                    onPress={closePasswordModal}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="chevron-back" size={22} color="#7A8FAD" />
+                  </TouchableOpacity>
+                  <Ionicons name="wifi" size={22} color="#1F5CA9" />
+                  <Text style={styles.modalTitle} numberOfLines={1}>{selectedSsid}</Text>
                 </View>
-              )}
-            </View>
-          </Pressable>
-          {!thietBiOnline && (
-            <View style={styles.offlineCard}>
-              <View style={styles.offlineCardHeader}>
-                <View style={styles.offlineIconBox}>
-                  <Ionicons name="warning" size={20} color="#DC2626" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.offlineCardTitle}>Mất kết nối</Text>
-                  <Text style={styles.offlineCardSubtitle}>
-                    Thử kiểm tra lại Wi-Fi hoặc dùng tính năng gửi Wi-Fi qua Bluetooth.
-                  </Text>
-                </View>
-              </View>
-            </View>
-          )}
-          {/* Card Cấu hình độc lập qua Bluetooth BLE */}
-          <Pressable onPress={(e) => e.stopPropagation()}>
-            <View style={styles.card}>
-              <TouchableOpacity
-                style={styles.cardHeader}
-                onPress={() => toggleCard('ble')}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.cardIconBox, { backgroundColor: '#E2F1FF' }]}>
-                  <Ionicons name="bluetooth" size={20} color="#1F5CA9" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cardTitle}>Gửi Wi-Fi qua Bluetooth</Text>
-                  <Text style={styles.cardSubtitle}>Dùng khi không kết nối được Wi-Fi trước đó</Text>
-                </View>
-                <Ionicons
-                  name="chevron-down"
-                  size={20}
-                  color="#7A8FAD"
-                  style={{ transform: [{ rotate: expandedCard === 'ble' ? '180deg' : '0deg' }] }}
-                />
-              </TouchableOpacity>
-
-              {expandedCard === 'ble' && (
-                <View style={styles.cardBody}>
-                  <Text style={styles.tuneFieldLabel}>Tên Wi-Fi</Text>
+                <Text style={styles.tuneFieldLabel}>Mật khẩu</Text>
+                <View style={styles.inputWithIcon}>
                   <TextInput
-                    style={styles.tuneInput}
-                    onChangeText={setBleSsid}
-                    placeholder="Nhập tên Wi-Fi"
+                    style={styles.inputInner}
+                    placeholder="Nhập mật khẩu Wi-Fi"
                     placeholderTextColor="#A0AEC0"
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    autoFocus
                   />
-
-                  <Text style={styles.tuneFieldLabel}>Mật khẩu Wi-Fi</Text>
-                  <View style={styles.inputWithIcon}>
-                    <TextInput
-                      style={styles.inputInner}
-                      placeholder="Nhập mật khẩu Wi-Fi"
-                      placeholderTextColor="#A0AEC0"
-                      onChangeText={setBlePassword}
-                      secureTextEntry={!showBlePassword}
-                      autoCapitalize="none"
-                      autoCorrect={false}
+                  <TouchableOpacity
+                    style={styles.eyeInner}
+                    onPress={() => setShowPassword(p => !p)}
+                    activeOpacity={0.6}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons
+                      name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                      size={19}
+                      color="#7A8FAD"
                     />
-                    <TouchableOpacity
-                      style={styles.eyeInner}
-                      onPress={() => setShowBlePassword(p => !p)}
-                      activeOpacity={0.6}
-                    >
-                      <Ionicons
-                        name={showBlePassword ? 'eye-off-outline' : 'eye-outline'}
-                        size={19}
-                        color="#7A8FAD"
-                      />
-                    </TouchableOpacity>
-                  </View>
-
-                  <Text style={[styles.tuneHintText, { marginTop: 12 }]}>
-                    Chú ý: nhập chính xác tên Wi-Fi và mật khẩu Wi-Fi trước khi nhấn kết nối.
-                  </Text>
-
-                  <View style={styles.tuneBottomActions}>
-                    <TouchableOpacity
-                      style={styles.tuneBottomButton}
-                      onPress={handleCancelBle}
-                      activeOpacity={0.7}
-                      disabled={dangKetNoiBle}
-                    >
-                      <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.tuneBottomButton}
-                      onPress={handleConfigViaBluetooth}
-                      activeOpacity={0.7}
-                      disabled={dangKetNoiBle}
-                    >
-                      {dangKetNoiBle ? (
-                        <ActivityIndicator size="small" color="#1F5CA9" />
-                      ) : (
-                        <Text style={styles.tuneBottomButtonTextSubmit}>Kết nối</Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
+                  </TouchableOpacity>
                 </View>
-              )}
-            </View>
+
+                {/* Các nút hành động xử lý kết nối */}
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={styles.modalBottomButton}
+                    onPress={closePasswordModal}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.modalBottomButtonTextCancel}>Hủy</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.modalBottomButton}
+                    onPress={handleSaveWifi}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.modalBottomButtonTextSubmit}>Kết nối</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
           </Pressable>
-
-          {/* Card Độ sáng */}
-          <Pressable onPress={(e) => e.stopPropagation()}>
-            <View style={styles.card}>
-              <TouchableOpacity
-                style={styles.cardHeader}
-                onPress={() => toggleCard('brightness')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.cardIconBox}>
-                  <Ionicons name="sunny" size={20} color="#1F5CA9" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cardTitle}>Độ sáng LED</Text>
-                  <Text style={styles.cardSubtitle}>Hiện tại: {brightness}</Text>
-                </View>
-                <Ionicons
-                  name="chevron-down"
-                  size={20}
-                  color="#7A8FAD"
-                  style={{ transform: [{ rotate: expandedCard === 'brightness' ? '180deg' : '0deg' }] }}
-                />
-              </TouchableOpacity>
-
-              {expandedCard === 'brightness' && (
-                <View style={styles.cardBody}>
-                  <Text style={styles.tuneFieldLabel}>Giá trị (0 – 100)</Text>
-                  <TextInput
-                    style={styles.tuneInput}
-                    onChangeText={(t) => {
-                      if (/^\d{0,3}$/.test(t)) setBrightnessInput(t);
-                    }}
-                    keyboardType="number-pad"
-                    maxLength={3}
-                    placeholder="VD: 50"
-                    placeholderTextColor="#A0AEC0"
-                    selectTextOnFocus
-                    onFocus={() => {
-                      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
-                    }}
-                  />
-
-                  <View style={styles.tuneBottomActions}>
-                    <TouchableOpacity
-                      style={styles.tuneBottomButton}
-                      onPress={handleCancelBrightness}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.tuneBottomButton}
-                      onPress={handleSaveBrightness}
-                      activeOpacity={0.7}
-                      disabled={!brightnessChanged}
-                    >
-                      <Text style={[styles.tuneBottomButtonTextSubmit, !brightnessChanged && styles.tuneBottomButtonTextDisabled]}>Xong</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
-            </View>
-          </Pressable>
-
-          {/* Card Thời gian chuông reo */}
-          <Pressable onPress={(e) => e.stopPropagation()}>
-            <View style={styles.card}>
-              <TouchableOpacity
-                style={styles.cardHeader}
-                onPress={() => toggleCard('ring')}
-                activeOpacity={0.7}
-              >
-                <View style={styles.cardIconBox}>
-                  <FontAwesome6 name="bell" size={18} color="#1F5CA9" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cardTitle}>Thời gian chuông reo</Text>
-                  <Text style={styles.cardSubtitle}>Hiện tại: {ringDuration} giây</Text>
-                </View>
-                <Ionicons
-                  name="chevron-down"
-                  size={20}
-                  color="#7A8FAD"
-                  style={{ transform: [{ rotate: expandedCard === 'ring' ? '180deg' : '0deg' }] }}
-                />
-              </TouchableOpacity>
-
-              {expandedCard === 'ring' && (
-                <View style={styles.cardBody}>
-                  <Text style={styles.tuneFieldLabel}>Số giây chuông reo (1 – 100)</Text>
-                  <View style={styles.tuneInputWithIcon}>
-                    <TextInput
-                      style={styles.tuneInputInner}
-                      onChangeText={(t) => {
-                        if (/^\d{0,3}$/.test(t)) setRingDurationInput(t);
-                      }}
-                      keyboardType="number-pad"
-                      maxLength={3}
-                      placeholder="VD: 5"
-                      placeholderTextColor="#A0AEC0"
-                      selectTextOnFocus
-                      onFocus={() => {
-                        setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
-                      }}
-                    />
-                    <Text style={styles.tuneUnitInner}>giây</Text>
-                  </View>
-
-                  <Text style={styles.tuneHintText}>
-                    Chuông sẽ reo trong khoảng thời gian này mỗi khi được kích hoạt.
-                  </Text>
-
-                  <View style={styles.tuneBottomActions}>
-                    <TouchableOpacity
-                      style={styles.tuneBottomButton}
-                      onPress={handleCancelRingDuration}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.tuneBottomButton}
-                      onPress={handleSaveRingDuration}
-                      activeOpacity={0.7}
-                      disabled={!ringDurationChanged}
-                    >
-                      <Text style={[styles.tuneBottomButtonTextSubmit, !ringDurationChanged && styles.tuneBottomButtonTextDisabled]}>Xong</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
-            </View>
-          </Pressable>
-
         </Pressable>
-      </ScrollView>
+      </Modal>
 
-      {/* Modal nhập mật khẩu + Gửi đám mây Cloud truyền thống */}
+      {/* Modal: Gửi Wi-Fi qua Bluetooth */}
       <Modal
-        visible={showPasswordModal}
+        visible={expandedCard === 'ble'}
         transparent
         animationType="fade"
-        onRequestClose={closePasswordModal}
+        onRequestClose={handleCancelBle}
       >
-        <Pressable style={styles.modalOverlay} onPress={closePasswordModal}>
-          <Pressable style={styles.passwordModal} onPress={(e) => e.stopPropagation()}>
+        <Pressable style={styles.modalOverlay} onPress={handleCancelBle}>
+          <Pressable style={styles.settingsModal} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
-              <Ionicons name="wifi" size={22} color="#1F5CA9" />
-              <Text style={styles.modalTitle} numberOfLines={1}>{selectedSsid}</Text>
+              <Ionicons name="bluetooth" size={22} color="#1F5CA9" />
+              <Text style={styles.modalTitle} numberOfLines={1}>Gửi Wi-Fi qua Bluetooth</Text>
+              <TouchableOpacity
+                onPress={handleCancelBle}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                disabled={dangKetNoiBle}
+              >
+                <Ionicons name="close" size={22} color="#7A8FAD" />
+              </TouchableOpacity>
             </View>
-            <Text style={styles.tuneFieldLabel}>Mật khẩu</Text>
+
+            <Text style={styles.tuneFieldLabel}>Tên Wi-Fi</Text>
+            <TextInput
+              style={styles.tuneInput}
+              value={bleSsid}
+              onChangeText={setBleSsid}
+              placeholder="Nhập tên Wi-Fi"
+              placeholderTextColor="#A0AEC0"
+            />
+
+            <Text style={styles.tuneFieldLabel}>Mật khẩu Wi-Fi</Text>
             <View style={styles.inputWithIcon}>
               <TextInput
                 style={styles.inputInner}
                 placeholder="Nhập mật khẩu Wi-Fi"
                 placeholderTextColor="#A0AEC0"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
+                value={blePassword}
+                onChangeText={setBlePassword}
+                secureTextEntry={!showBlePassword}
                 autoCapitalize="none"
                 autoCorrect={false}
-                autoFocus
               />
               <TouchableOpacity
                 style={styles.eyeInner}
-                onPress={() => setShowPassword(p => !p)}
+                onPress={() => setShowBlePassword(p => !p)}
                 activeOpacity={0.6}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 <Ionicons
-                  name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                  name={showBlePassword ? 'eye-off-outline' : 'eye-outline'}
                   size={19}
                   color="#7A8FAD"
                 />
               </TouchableOpacity>
             </View>
 
-            {/* Các nút hành động xử lý kết nối */}
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.modalBottomButton}
-                onPress={closePasswordModal}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.modalBottomButtonTextCancel}>Hủy</Text>
-              </TouchableOpacity>
+            <Text style={[styles.tuneHintText, { marginTop: 12 }]}>
+              Chú ý: nhập chính xác tên Wi-Fi và mật khẩu Wi-Fi trước khi nhấn kết nối.
+            </Text>
 
+            <View style={styles.tuneBottomActions}>
               <TouchableOpacity
-                style={styles.modalBottomButton}
-                onPress={handleSaveWifi}
+                style={styles.tuneBottomButton}
+                onPress={handleCancelBle}
+                activeOpacity={0.7}
+                disabled={dangKetNoiBle}
+              >
+                <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.tuneBottomButton}
+                onPress={handleConfigViaBluetooth}
+                activeOpacity={0.7}
+                disabled={dangKetNoiBle}
+              >
+                {dangKetNoiBle ? (
+                  <ActivityIndicator size="small" color="#1F5CA9" />
+                ) : (
+                  <Text style={styles.tuneBottomButtonTextSubmit}>Kết nối</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal: Độ sáng LED */}
+      <Modal
+        visible={expandedCard === 'brightness'}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCancelBrightness}
+      >
+        <Pressable style={styles.modalOverlay} onPress={handleCancelBrightness}>
+          <Pressable style={styles.settingsModal} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="sunny" size={22} color="#1F5CA9" />
+              <Text style={styles.modalTitle} numberOfLines={1}>Độ sáng LED</Text>
+              <TouchableOpacity
+                onPress={handleCancelBrightness}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={22} color="#7A8FAD" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.tuneFieldLabel}>Giá trị (0 – 100)</Text>
+            <TextInput
+              style={styles.tuneInput}
+              onChangeText={(t) => {
+                if (/^\d{0,3}$/.test(t)) setBrightnessInput(t);
+              }}
+              keyboardType="number-pad"
+              maxLength={3}
+              placeholder="VD: 50"
+              placeholderTextColor="#A0AEC0"
+              selectTextOnFocus
+              autoFocus
+            />
+
+            <View style={styles.tuneBottomActions}>
+              <TouchableOpacity
+                style={styles.tuneBottomButton}
+                onPress={handleCancelBrightness}
                 activeOpacity={0.7}
               >
-                <Text style={styles.modalBottomButtonTextSubmit}>Kết nối</Text>
+                <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.tuneBottomButton}
+                onPress={handleSaveBrightness}
+                activeOpacity={0.7}
+                disabled={!brightnessChanged}
+              >
+                <Text style={[styles.tuneBottomButtonTextSubmit, !brightnessChanged && styles.tuneBottomButtonTextDisabled]}>Xong</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal: Thời gian chuông reo */}
+      <Modal
+        visible={expandedCard === 'ring'}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCancelRingDuration}
+      >
+        <Pressable style={styles.modalOverlay} onPress={handleCancelRingDuration}>
+          <Pressable style={styles.settingsModal} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <FontAwesome6 name="bell" size={18} color="#1F5CA9" />
+              <Text style={styles.modalTitle} numberOfLines={1}>Thời gian chuông reo</Text>
+              <TouchableOpacity
+                onPress={handleCancelRingDuration}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={22} color="#7A8FAD" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.tuneFieldLabel}>Số giây chuông reo (1 – 30)</Text>
+            <View style={styles.tuneInputWithIcon}>
+              <TextInput
+                style={styles.tuneInputInner}
+                onChangeText={(t) => {
+                  if (/^\d{0,2}$/.test(t)) setRingDurationInput(t);
+                }}
+                keyboardType="number-pad"
+                maxLength={2}
+                placeholder="VD: 5"
+                placeholderTextColor="#A0AEC0"
+                selectTextOnFocus
+                autoFocus
+              />
+              <Text style={styles.tuneUnitInner}>giây</Text>
+            </View>
+
+            <Text style={styles.tuneHintText}>
+              Chuông sẽ reo trong khoảng thời gian này mỗi khi được kích hoạt.
+            </Text>
+
+            <View style={styles.tuneBottomActions}>
+              <TouchableOpacity
+                style={styles.tuneBottomButton}
+                onPress={handleCancelRingDuration}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.tuneBottomButton}
+                onPress={handleSaveRingDuration}
+                activeOpacity={0.7}
+                disabled={!ringDurationChanged}
+              >
+                <Text style={[styles.tuneBottomButtonTextSubmit, !ringDurationChanged && styles.tuneBottomButtonTextDisabled]}>Xong</Text>
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -1013,6 +1080,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff', borderRadius: 20, padding: 20, width: '100%', maxWidth: 380,
     elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12,
   },
+  settingsModal: {
+    backgroundColor: '#ffffff', borderRadius: 20, padding: 20, width: '100%', maxWidth: 420, maxHeight: '85%',
+    elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12,
+  },
+  settingsModalScroll: { flexGrow: 0 },
   modalHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
   modalTitle: { fontSize: 16, fontWeight: '700', color: '#11181C', flex: 1 },
   modalActions: {

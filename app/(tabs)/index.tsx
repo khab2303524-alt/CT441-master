@@ -166,6 +166,17 @@ export default function ScheduleScreen() {
     return () => unsubscribe();
   }, []);
 
+  // Đồng bộ trạng thái chuông thủ công theo Firebase: firmware tự tắt chuông sau 3 giây
+  // và ghi lại /DongHo/ChuongThuCong = false, nên app chỉ cần lắng nghe để cập nhật UI,
+  // không cần người dùng bấm tắt tay nữa.
+  useEffect(() => {
+    const chuongRef = ref(db, 'DongHo/ChuongThuCong');
+    const unsubscribe = onValue(chuongRef, (snapshot) => {
+      setBellRinging(!!snapshot.val());
+    });
+    return () => unsubscribe();
+  }, []);
+
   // Restore khi app về background/bị kill trong lúc đang ở tab thủ công
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
@@ -268,35 +279,26 @@ export default function ScheduleScreen() {
     else switchToSchedule();
   };
 
-  // ── TOGGLE CHUÔNG THỦ CÔNG ──
-  // Bấm lần 1: bật chuông (ghi true lên Firebase)
-  // Bấm lần 2: tắt chuông (ghi false lên Firebase)
+  // ── BẤM CHUÔNG THỦ CÔNG ──
+  // Chỉ bật chuông (ghi true lên Firebase). Chuông sẽ tự reo 3 giây rồi firmware
+  // tự tắt và ghi lại false lên Firebase (xem listener onValue phía trên), nên
+  // không cần bấm lần 2 để tắt nữa. Trong lúc đang reo, bấm nút sẽ không có tác dụng.
   const ringBellNow = () => {
-    if (!bellRinging) {
-      setBellRinging(true);
-      set(ref(db, 'DongHo/ChuongThuCong'), true)
-        .then(() => {
-          Animated.sequence([
-            Animated.timing(bellScaleAnim, { toValue: 1.12, duration: 100, useNativeDriver: true }),
-            Animated.timing(bellScaleAnim, { toValue: 0.94, duration: 80, useNativeDriver: true }),
-            Animated.timing(bellScaleAnim, { toValue: 1.08, duration: 80, useNativeDriver: true }),
-            Animated.timing(bellScaleAnim, { toValue: 1, duration: 120, useNativeDriver: true }),
-          ]).start();
-        })
-        .catch((err) => {
-          showError('Lỗi', err.message);
-          setBellRinging(false);
-        });
-    } else {
-      set(ref(db, 'DongHo/ChuongThuCong'), false)
-        .then(() => {
-          setBellRinging(false);
-          Animated.timing(bellScaleAnim, { toValue: 1, duration: 120, useNativeDriver: true }).start();
-        })
-        .catch((err) => {
-          showError('Lỗi', err.message);
-        });
-    }
+    if (bellRinging) return;
+    setBellRinging(true);
+    set(ref(db, 'DongHo/ChuongThuCong'), true)
+      .then(() => {
+        Animated.sequence([
+          Animated.timing(bellScaleAnim, { toValue: 1.12, duration: 100, useNativeDriver: true }),
+          Animated.timing(bellScaleAnim, { toValue: 0.94, duration: 80, useNativeDriver: true }),
+          Animated.timing(bellScaleAnim, { toValue: 1.08, duration: 80, useNativeDriver: true }),
+          Animated.timing(bellScaleAnim, { toValue: 1, duration: 120, useNativeDriver: true }),
+        ]).start();
+      })
+      .catch((err) => {
+        showError('Lỗi', err.message);
+        setBellRinging(false);
+      });
   };
 
   const toggleDay = useCallback((day: number) => {
@@ -523,7 +525,7 @@ export default function ScheduleScreen() {
         <View style={styles.manualModeContainer}>
           <View style={styles.manualModeCenter}>
             <Text style={[styles.bellBtnLabel, bellRinging && styles.bellBtnLabelRinging]}>
-              {bellRinging ? 'Đang reo, nhấn để tắt' : 'Nhấn để bật chuông'}
+              {bellRinging ? 'Đang reo...' : 'Nhấn để bật chuông'}
             </Text>
 
             <Animated.View style={[styles.bellShadowWrap, { transform: [{ scale: bellScaleAnim }] }]}>
@@ -531,6 +533,7 @@ export default function ScheduleScreen() {
                 style={styles.bellRingOuter}
                 onPress={ringBellNow}
                 activeOpacity={0.82}
+                disabled={bellRinging}
               >
                 <LinearGradient
                   colors={bellRinging ? ['#FF8A65', '#D84315'] : ['#22C3FF', '#0E7FC4']}

@@ -1,6 +1,6 @@
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import { onValue, ref, update } from 'firebase/database';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -39,32 +39,74 @@ export default function ClockScreen() {
   const timeData = useESPTime();
   const { showSuccess, showError } = useCustomAlert();
 
+  // "Neo" thời gian lưu dưới dạng epoch (ms) quy đổi từ Gio/Phut/Giay/Ngay/Thang/Nam,
+  // kèm thời điểm nhận nó theo đồng hồ máy (Date.now()).
+  // Sở dĩ dùng epoch thay vì lưu riêng từng trường là để cộng trừ/tràn ngày-tháng-năm
+  // được xử lý tự động bởi đối tượng Date, khỏi phải tự viết logic carry dễ sai.
+  const anchorRef = useRef<{ epochMs: number; receivedAtMs: number } | null>(null);
+
+  // Ngưỡng lệch cho phép trước khi coi là "lệch thật" (mất kết nối lâu, chỉnh giờ tay...).
+  // Sai lệch nhỏ hơn ngưỡng này chỉ là do độ trễ mạng/Firebase -> BỎ QUA, không nhảy số,
+  // để tick nội bộ tiếp tục chạy mượt thay vì giật lùi rồi đếm lên lại.
+  const RESYNC_THRESHOLD_MS = 1500;
+
+  const toEpochMs = (d: { Gio: number; Phut: number; Giay: number; Ngay: number; Thang: number; Nam: number }) =>
+    new Date(d.Nam, d.Thang - 1, d.Ngay, d.Gio, d.Phut, d.Giay).getTime();
+
+  const applyDisplayFromEpoch = (epochMs: number) => {
+    const d = new Date(epochMs);
+    const formattedTime = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    setTime(formattedTime);
+    setSeconds(String(d.getSeconds()).padStart(2, '0'));
+
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dayName = DAY_NAMES[d.getDay()] || `Thứ ${d.getDay() + 1}`;
+    setDateStr(`${dayName}, ${dd}/${mm}/${d.getFullYear()}`);
+  };
+
+  // Khi có dữ liệu MỚI từ Firebase: chỉ resync (nhảy neo) nếu lệch vượt ngưỡng.
+  // Việc gán editHours/editMinutes... tách riêng, KHÔNG phụ thuộc editModalVisible
+  // trong effect này nữa (tránh bug: mở/đóng modal cũng làm reset neo -> giật số).
   useEffect(() => {
-    if (timeData) {
-      const { Gio, Phut, Giay, Ngay, Thang, Nam, Thu } = timeData;
+    if (!timeData) return;
+    const { Gio, Phut, Giay, Ngay, Thang, Nam } = timeData;
+    const newEpochMs = toEpochMs({ Gio, Phut, Giay, Ngay, Thang, Nam });
+    const now = Date.now();
+    const anchor = anchorRef.current;
 
-      const formattedTime = `${String(Gio).padStart(2, '0')}:${String(Phut).padStart(2, '0')}`;
-      setTime(formattedTime);
-      setSeconds(String(Giay).padStart(2, '0'));
+    const predictedMs = anchor ? anchor.epochMs + (now - anchor.receivedAtMs) : null;
+    const diffMs = predictedMs === null ? Infinity : Math.abs(newEpochMs - predictedMs);
 
-      if (!editModalVisible) {
-        setEditHours(Gio);
-        setEditMinutes(Phut);
-        setEditSeconds(Giay);
+    if (diffMs > RESYNC_THRESHOLD_MS) {
+      anchorRef.current = { epochMs: newEpochMs, receivedAtMs: now };
+      applyDisplayFromEpoch(newEpochMs);
+    }
+    // else: lệch nhỏ do trễ mạng -> giữ nguyên neo cũ, không đụng vào display
+  }, [timeData]);
 
-        setEditNgay(Ngay);
-        setEditThang(Thang);
-        setEditNam(Nam);
-      }
-
-      const dd = String(Ngay).padStart(2, '0');
-      const mm = String(Thang).padStart(2, '0');
-      const yyyy = Nam;
-
-      const dayName = DAY_NAMES[Thu] || `Thứ ${Thu + 1}`;
-      setDateStr(`${dayName}, ${dd}/${mm}/${yyyy}`);
+  // Đồng bộ các trường chỉnh giờ/ngày trong modal khi có dữ liệu mới (tách riêng khỏi anchor)
+  useEffect(() => {
+    if (timeData && !editModalVisible) {
+      setEditHours(timeData.Gio);
+      setEditMinutes(timeData.Phut);
+      setEditSeconds(timeData.Giay);
+      setEditNgay(timeData.Ngay);
+      setEditThang(timeData.Thang);
+      setEditNam(timeData.Nam);
     }
   }, [timeData, editModalVisible]);
+
+  // Tick nội bộ mỗi 1s dựa trên Date.now() của máy, độc lập với tần suất Firebase gửi.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      applyDisplayFromEpoch(anchor.epochMs + (Date.now() - anchor.receivedAtMs));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     const sensorRef = ref(db, 'CamBien');
@@ -423,9 +465,9 @@ const styles = StyleSheet.create({
   },
 
   timeWrapper: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', marginVertical: 4 },
-  timeDisplay: { fontSize: 72, fontWeight: '900', color: '#1F5CA9', letterSpacing: -1, fontVariant: ['tabular-nums'] },
   secondsContainer: { marginLeft: 6, marginBottom: 14, width: 48, alignItems: 'flex-start' },
   secondsDisplay: { fontSize: 24, fontWeight: '800', color: '#00AFEF', fontVariant: ['tabular-nums'] },
+  timeDisplay: { fontSize: 72, fontWeight: '900', color: '#1F5CA9', letterSpacing: -1, fontVariant: ['tabular-nums'] },
 
   dateContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 14, backgroundColor: '#F1F5F9', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 100 },
   dateDisplay: { fontSize: 13, color: '#475569', fontWeight: '700' },
