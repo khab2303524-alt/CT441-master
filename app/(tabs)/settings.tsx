@@ -33,6 +33,22 @@ const bleManager = new BleManager();
 const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
 const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
+// Người dùng nhập/thấy độ sáng theo thang 0-100, nhưng thiết bị chỉ nhận tối đa 90
+const BRIGHTNESS_UI_MAX = 100;
+const BRIGHTNESS_DEVICE_MAX = 90;
+
+// Quy đổi giá trị người dùng nhập (0-100) sang giá trị gửi xuống thiết bị (0-90)
+const uiToDeviceBrightness = (uiVal: number): number => {
+  const clamped = Math.max(0, Math.min(BRIGHTNESS_UI_MAX, uiVal));
+  return Math.round((clamped * BRIGHTNESS_DEVICE_MAX) / BRIGHTNESS_UI_MAX);
+};
+
+// Quy đổi giá trị đọc từ thiết bị (0-90) sang giá trị hiển thị cho người dùng (0-100)
+const deviceToUiBrightness = (deviceVal: number): number => {
+  const clamped = Math.max(0, Math.min(BRIGHTNESS_DEVICE_MAX, deviceVal));
+  return Math.round((clamped * BRIGHTNESS_UI_MAX) / BRIGHTNESS_DEVICE_MAX);
+};
+
 const normalizeWifiList = (raw: unknown): WifiItem[] => {
   if (Array.isArray(raw)) {
     return raw.filter((x): x is WifiItem => (
@@ -84,9 +100,9 @@ export default function SettingsScreen() {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bleDeviceFoundRef = useRef(false);
 
-  const [brightness, setBrightness] = useState(200);
-  const [savedBrightness, setSavedBrightness] = useState(200);
-  const [brightnessInput, setBrightnessInput] = useState('200');
+  const [brightness, setBrightness] = useState(100);
+  const [savedBrightness, setSavedBrightness] = useState(100);
+  const [brightnessInput, setBrightnessInput] = useState('100');
 
   const [ringDuration, setRingDuration] = useState(5);
   const [savedRingDuration, setSavedRingDuration] = useState(5);
@@ -129,9 +145,10 @@ export default function SettingsScreen() {
     const unsubBright = onValue(ref(db, 'DongHo/DoSang'), (snap) => {
       const val = snap.val();
       if (typeof val === 'number') {
-        setBrightness(val);
-        setSavedBrightness(val);
-        setBrightnessInput(String(val));
+        const uiVal = deviceToUiBrightness(val);
+        setBrightness(uiVal);
+        setSavedBrightness(uiVal);
+        setBrightnessInput(String(uiVal));
       }
     });
     const unsubRing = onValue(ref(db, 'DongHo/ThoiGianReo'), (snap) => {
@@ -156,11 +173,11 @@ export default function SettingsScreen() {
 
     const heartbeatCheckInterval = setInterval(() => {
       const daImLang = Date.now() - lastHeartbeatRef.current;
-      if (daImLang > 45000 && !tungMatKetNoiRef.current) {
+      if (daImLang > 10000 && !tungMatKetNoiRef.current) {
         tungMatKetNoiRef.current = true;
         setThietBiOnline(false);
       }
-    }, 3000);
+    }, 5000);
 
     // Khi app quay lại foreground (mở lại app / chuyển tab về), thời gian ở nền
     // không được tính là "mất kết nối" thật, nên reset mốc thời gian tại đây.
@@ -369,11 +386,13 @@ export default function SettingsScreen() {
       showError('Giá trị không hợp lệ', 'Vui lòng nhập số từ 0 đến 100');
       return;
     }
+    const deviceVal = uiToDeviceBrightness(num);
     try {
-      await update(ref(db, 'DongHo'), { DoSang: num });
+      await update(ref(db, 'DongHo'), { DoSang: deviceVal });
       setBrightness(num);
       setSavedBrightness(num);
-      showSuccess('Đã lưu', `Độ sáng LED: ${num}`);
+      setExpandedCard(null);
+      showSuccess('Đã lưu', `Độ sáng LED: ${num}%`);
     } catch (e: any) { showError('Lỗi Firebase', e.message); }
   };
 
@@ -402,6 +421,7 @@ export default function SettingsScreen() {
       await update(ref(db, 'DongHo'), { ThoiGianReo: num });
       setRingDuration(num);
       setSavedRingDuration(num);
+      setExpandedCard(null);
       showSuccess('Đã lưu', `Thời gian chuông reo: ${num} giây`);
     } catch (e: any) { showError('Lỗi Firebase', e.message); }
   };
@@ -520,7 +540,7 @@ export default function SettingsScreen() {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.cardTitle}>Độ sáng LED</Text>
-                  <Text style={styles.cardSubtitle}>Hiện tại: {brightness}</Text>
+                  <Text style={styles.cardSubtitle}>Hiện tại: {brightness}%</Text>
                 </View>
               </TouchableOpacity>
             </View>
@@ -722,82 +742,88 @@ export default function SettingsScreen() {
         animationType="fade"
         onRequestClose={handleCancelBle}
       >
-        <Pressable style={styles.modalOverlay} onPress={handleCancelBle}>
-          <Pressable style={styles.settingsModal} onPress={(e) => e.stopPropagation()}>
-            <View style={styles.modalHeader}>
-              <Ionicons name="bluetooth" size={22} color="#1F5CA9" />
-              <Text style={styles.modalTitle} numberOfLines={1}>Gửi Wi-Fi qua Bluetooth</Text>
-              <TouchableOpacity
-                onPress={handleCancelBle}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                disabled={dangKetNoiBle}
-              >
-                <Ionicons name="close" size={22} color="#7A8FAD" />
-              </TouchableOpacity>
-            </View>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
+          <Pressable style={styles.modalOverlay} onPress={handleCancelBle}>
+            <Pressable style={styles.settingsModal} onPress={(e) => e.stopPropagation()}>
+              <View style={styles.modalHeader}>
+                <Ionicons name="bluetooth" size={22} color="#1F5CA9" />
+                <Text style={styles.modalTitle} numberOfLines={1}>Gửi Wi-Fi qua Bluetooth</Text>
+                <TouchableOpacity
+                  onPress={handleCancelBle}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  disabled={dangKetNoiBle}
+                >
+                  <Ionicons name="close" size={22} color="#7A8FAD" />
+                </TouchableOpacity>
+              </View>
 
-            <Text style={styles.tuneFieldLabel}>Tên Wi-Fi</Text>
-            <TextInput
-              style={styles.tuneInput}
-              value={bleSsid}
-              onChangeText={setBleSsid}
-              placeholder="Nhập tên Wi-Fi"
-              placeholderTextColor="#A0AEC0"
-            />
-
-            <Text style={styles.tuneFieldLabel}>Mật khẩu Wi-Fi</Text>
-            <View style={styles.inputWithIcon}>
+              <Text style={styles.tuneFieldLabel}>Tên Wi-Fi</Text>
               <TextInput
-                style={styles.inputInner}
-                placeholder="Nhập mật khẩu Wi-Fi"
+                style={styles.tuneInput}
+                value={bleSsid}
+                onChangeText={setBleSsid}
+                placeholder="Nhập tên Wi-Fi"
                 placeholderTextColor="#A0AEC0"
-                value={blePassword}
-                onChangeText={setBlePassword}
-                secureTextEntry={!showBlePassword}
-                autoCapitalize="none"
-                autoCorrect={false}
               />
-              <TouchableOpacity
-                style={styles.eyeInner}
-                onPress={() => setShowBlePassword(p => !p)}
-                activeOpacity={0.6}
-              >
-                <Ionicons
-                  name={showBlePassword ? 'eye-off-outline' : 'eye-outline'}
-                  size={19}
-                  color="#7A8FAD"
+
+              <Text style={styles.tuneFieldLabel}>Mật khẩu Wi-Fi</Text>
+              <View style={styles.inputWithIcon}>
+                <TextInput
+                  style={styles.inputInner}
+                  placeholder="Nhập mật khẩu Wi-Fi"
+                  placeholderTextColor="#A0AEC0"
+                  value={blePassword}
+                  onChangeText={setBlePassword}
+                  secureTextEntry={!showBlePassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
-              </TouchableOpacity>
-            </View>
+                <TouchableOpacity
+                  style={styles.eyeInner}
+                  onPress={() => setShowBlePassword(p => !p)}
+                  activeOpacity={0.6}
+                >
+                  <Ionicons
+                    name={showBlePassword ? 'eye-off-outline' : 'eye-outline'}
+                    size={19}
+                    color="#7A8FAD"
+                  />
+                </TouchableOpacity>
+              </View>
 
-            <Text style={[styles.tuneHintText, { marginTop: 12 }]}>
-              Chú ý: nhập chính xác tên Wi-Fi và mật khẩu Wi-Fi trước khi nhấn kết nối.
-            </Text>
+              <Text style={[styles.tuneHintText, { marginTop: 12 }]}>
+                Chú ý: nhập chính xác tên Wi-Fi và mật khẩu Wi-Fi trước khi nhấn kết nối.
+              </Text>
 
-            <View style={styles.tuneBottomActions}>
-              <TouchableOpacity
-                style={styles.tuneBottomButton}
-                onPress={handleCancelBle}
-                activeOpacity={0.7}
-                disabled={dangKetNoiBle}
-              >
-                <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.tuneBottomButton}
-                onPress={handleConfigViaBluetooth}
-                activeOpacity={0.7}
-                disabled={dangKetNoiBle}
-              >
-                {dangKetNoiBle ? (
-                  <ActivityIndicator size="small" color="#1F5CA9" />
-                ) : (
-                  <Text style={styles.tuneBottomButtonTextSubmit}>Kết nối</Text>
-                )}
-              </TouchableOpacity>
-            </View>
+              <View style={styles.tuneBottomActions}>
+                <TouchableOpacity
+                  style={styles.tuneBottomButton}
+                  onPress={handleCancelBle}
+                  activeOpacity={0.7}
+                  disabled={dangKetNoiBle}
+                >
+                  <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.tuneBottomButton}
+                  onPress={handleConfigViaBluetooth}
+                  activeOpacity={0.7}
+                  disabled={dangKetNoiBle}
+                >
+                  {dangKetNoiBle ? (
+                    <ActivityIndicator size="small" color="#1F5CA9" />
+                  ) : (
+                    <Text style={styles.tuneBottomButtonTextSubmit}>Kết nối</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </Pressable>
           </Pressable>
-        </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal: Độ sáng LED */}
@@ -821,18 +847,21 @@ export default function SettingsScreen() {
             </View>
 
             <Text style={styles.tuneFieldLabel}>Giá trị (0 – 100)</Text>
-            <TextInput
-              style={styles.tuneInput}
-              onChangeText={(t) => {
-                if (/^\d{0,3}$/.test(t)) setBrightnessInput(t);
-              }}
-              keyboardType="number-pad"
-              maxLength={3}
-              placeholder="VD: 50"
-              placeholderTextColor="#A0AEC0"
-              selectTextOnFocus
-              autoFocus
-            />
+            <View style={styles.tuneInputWithIcon}>
+              <TextInput
+                style={styles.tuneInputInner}
+                onChangeText={(t) => {
+                  if (/^\d{0,3}$/.test(t)) setBrightnessInput(t);
+                }}
+                keyboardType="number-pad"
+                maxLength={3}
+                placeholder="VD: 50"
+                placeholderTextColor="#A0AEC0"
+                selectTextOnFocus
+                autoFocus
+              />
+              <Text style={styles.tuneUnitInner}>%</Text>
+            </View>
 
             <View style={styles.tuneBottomActions}>
               <TouchableOpacity
