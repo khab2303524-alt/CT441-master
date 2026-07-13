@@ -383,6 +383,10 @@ export default function ScheduleScreen() {
       saveScheduleToFirebase(updated);
       showSuccess('Thành công', 'Đã cập nhật hẹn giờ');
     } else {
+      if (schedule.length >= 50) {
+        showError('Giới hạn', 'Chỉ được tạo tối đa 50 hẹn giờ');
+        return;
+      }
       const newId = Math.max(...schedule.map(s => s.id), 0) + 1;
       const newItem: ScheduleItem = { id: newId, alarmTime: alarmTimeStr, note, enabled: true, days: sortedDays };
       const updated = [...schedule, newItem];

@@ -469,6 +469,21 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.body}>
+          {!thietBiOnline && (
+            <View style={styles.offlineCard}>
+              <View style={styles.offlineCardHeader}>
+                <View style={styles.offlineIconBox}>
+                  <Ionicons name="warning" size={20} color="#DC2626" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.offlineCardTitle}>Mất kết nối</Text>
+                  <Text style={styles.offlineCardSubtitle}>
+                    Thử kiểm tra nguồn thiết bị hoặc Wi-Fi.
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
           {/* Card Wi-Fi */}
           <Pressable onPress={(e) => e.stopPropagation()}>
             <View style={styles.card}>
@@ -493,21 +508,7 @@ export default function SettingsScreen() {
               </TouchableOpacity>
             </View>
           </Pressable>
-          {!thietBiOnline && (
-            <View style={styles.offlineCard}>
-              <View style={styles.offlineCardHeader}>
-                <View style={styles.offlineIconBox}>
-                  <Ionicons name="warning" size={20} color="#DC2626" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.offlineCardTitle}>Mất kết nối</Text>
-                  <Text style={styles.offlineCardSubtitle}>
-                    Thử kiểm tra lại Wi-Fi hoặc dùng tính năng gửi Wi-Fi qua Bluetooth.
-                  </Text>
-                </View>
-              </View>
-            </View>
-          )}
+          
           {/* Card Cấu hình độc lập qua Bluetooth BLE */}
           <Pressable onPress={(e) => e.stopPropagation()}>
             <View style={styles.card}>
@@ -521,7 +522,7 @@ export default function SettingsScreen() {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.cardTitle}>Gửi Wi-Fi qua Bluetooth</Text>
-                  <Text style={styles.cardSubtitle}>Dùng khi không kết nối được Wi-Fi trước đó</Text>
+                  <Text style={styles.cardSubtitle}>Dùng khi Wi-Fi trước đó không thể kết nối được nữa. Khởi động lại thiết bị trước khi dùng.</Text>
                 </View>
               </TouchableOpacity>
             </View>
@@ -985,7 +986,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#E8F4FB', alignItems: 'center', justifyContent: 'center',
   },
   cardTitle: { fontSize: 16, fontWeight: '700', color: '#11181C' },
-  cardSubtitle: { fontSize: 12, color: '#7A8FAD', marginTop: 2 },
+  cardSubtitle: { fontSize: 12, color: '#7A8FAD', marginTop: 2, textAlign: 'justify' },
   cardSubtitleBold: { fontWeight: '700', color: '#1F5CA9' },
   cardBody: {
     padding: 16, paddingTop: 4,
