@@ -33,17 +33,17 @@ const bleManager = new BleManager();
 const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
 const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
-// Người dùng nhập/thấy độ sáng theo thang 0-100, nhưng thiết bị chỉ nhận tối đa 90
+// Người dùng nhập/thấy độ sáng theo thang 0-100, nhưng thiết bị chỉ nhận tối đa 200
 const BRIGHTNESS_UI_MAX = 100;
-const BRIGHTNESS_DEVICE_MAX = 90;
+const BRIGHTNESS_DEVICE_MAX = 200;
 
-// Quy đổi giá trị người dùng nhập (0-100) sang giá trị gửi xuống thiết bị (0-90)
+// Quy đổi giá trị người dùng nhập (0-100) sang giá trị gửi xuống thiết bị (0-200)
 const uiToDeviceBrightness = (uiVal: number): number => {
   const clamped = Math.max(0, Math.min(BRIGHTNESS_UI_MAX, uiVal));
   return Math.round((clamped * BRIGHTNESS_DEVICE_MAX) / BRIGHTNESS_UI_MAX);
 };
 
-// Quy đổi giá trị đọc từ thiết bị (0-90) sang giá trị hiển thị cho người dùng (0-100)
+// Quy đổi giá trị đọc từ thiết bị (0-200) sang giá trị hiển thị cho người dùng (0-100)
 const deviceToUiBrightness = (deviceVal: number): number => {
   const clamped = Math.max(0, Math.min(BRIGHTNESS_DEVICE_MAX, deviceVal));
   return Math.round((clamped * BRIGHTNESS_UI_MAX) / BRIGHTNESS_DEVICE_MAX);
