@@ -8,15 +8,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
   // Chiều cao "nội dung" mong muốn của tab bar (icon + label), chưa tính safe area
-  const CONTENT_HEIGHT = 78;
+  const CONTENT_HEIGHT = 66;
 
   return (
     <Tabs
       screenOptions={{
         tabBarStyle: {
           height: CONTENT_HEIGHT + insets.bottom,
-          paddingBottom: Math.max(insets.bottom, 16),
-          paddingTop: 12,
+          paddingBottom: Math.max(insets.bottom, 10),
+          paddingTop: 8,
           backgroundColor: '#ffffff',
           borderTopWidth: 0,
           elevation: 5,
@@ -33,7 +33,7 @@ export default function TabLayout() {
           marginBottom: 2,
         },
         tabBarLabelStyle: {
-          fontSize: 12,
+          fontSize: 11,
           fontWeight: '600',
           marginTop: 2,
         },
@@ -48,21 +48,21 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Hẹn giờ',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="alarm.fill" color={color} />,
+          tabBarIcon: ({ color }) => <IconSymbol size={25} name="alarm.fill" color={color} />,
         }}
       />
       <Tabs.Screen
         name="clock"
         options={{
           title: 'Đồng hồ',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="clock.fill" color={color} />,
+          tabBarIcon: ({ color }) => <IconSymbol size={25} name="clock.fill" color={color} />,
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: 'Cài đặt',
-          tabBarIcon: ({ color }) => <Ionicons size={28} name="settings-outline" color={color} />,
+          tabBarIcon: ({ color }) => <Ionicons size={25} name="settings-outline" color={color} />,
         }}
       />
     </Tabs>

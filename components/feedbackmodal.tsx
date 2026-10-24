@@ -10,26 +10,34 @@ export interface FeedbackModalProps {
   type: 'success' | 'error';
   title: string;
   message: string;
+  videoSource?: any;
   onDismiss: () => void;
 }
 
+// Tên Wi-Fi của đồng hồ: bỏ dấu ngoặc kép, hiển thị chữ xanh đậm như phần hướng dẫn
+const renderMessage = (message: string) =>
+  message.split(/(["“”]?LED_P10["“”]?)/g).map((part, i) =>
+    /LED_P10/.test(part)
+      ? <Text key={i} style={styles.chip}>LED_P10</Text>
+      : part,
+  );
+
 export function FeedbackModal({ visible, type, title, message, onDismiss }: FeedbackModalProps) {
-  const scale   = useRef(new Animated.Value(0.9)).current;
+  const scale = useRef(new Animated.Value(0.92)).current;
   const opacity = useRef(new Animated.Value(0)).current;
 
-  const isSuccess  = type === 'success';
+  const isSuccess = type === 'success';
   const accentColor = isSuccess ? '#16A34A' : '#DC2626';
-  const iconBg      = isSuccess ? '#DCFCE7' : '#FEE2E2';
-  const iconName    = isSuccess ? 'checkmark-circle' : 'close-circle';
+  const iconName = isSuccess ? 'checkmark-circle' : 'close-circle';
 
   useEffect(() => {
     if (visible) {
       Animated.parallel([
-        Animated.spring(scale,   { toValue: 1, useNativeDriver: true, tension: 120, friction: 10 }),
+        Animated.spring(scale, { toValue: 1, useNativeDriver: true, tension: 120, friction: 10 }),
         Animated.timing(opacity, { toValue: 1, duration: 160, useNativeDriver: true }),
       ]).start();
     } else {
-      scale.setValue(0.9);
+      scale.setValue(0.92);
       opacity.setValue(0);
     }
   }, [visible]);
@@ -39,28 +47,25 @@ export function FeedbackModal({ visible, type, title, message, onDismiss }: Feed
       <Pressable style={styles.overlay} onPress={onDismiss}>
         <Animated.View style={[styles.box, { opacity, transform: [{ scale }] }]}>
           <Pressable onPress={e => e.stopPropagation()}>
-            {/* Icon */}
-            <View style={styles.iconSection}>
-              <View style={[styles.iconCircle, { backgroundColor: iconBg }]}>
-                <Ionicons name={iconName as any} size={40} color={accentColor} />
-              </View>
+            {/* Header: icon + tiêu đề */}
+            <View style={styles.header}>
+              <Ionicons name={iconName as any} size={28} color={accentColor} />
+              <Text style={styles.title} numberOfLines={2}>{title}</Text>
             </View>
 
-            {/* Text */}
-            <View style={styles.textSection}>
-              <Text style={styles.title}>{title}</Text>
-              <Text style={styles.message}>{message}</Text>
-            </View>
+            {/* Nội dung: luôn căn trái */}
+            <Text style={styles.message}>{renderMessage(message)}</Text>
 
-            {/* Divider + Button */}
-            <View style={styles.divider} />
-            <TouchableOpacity
-              style={styles.btn}
-              onPress={onDismiss}
-              activeOpacity={0.6}
-            >
-              <Text style={[styles.btnText, { color: accentColor }]}>Đồng ý</Text>
-            </TouchableOpacity>
+            {/* Nút OK căn phải */}
+            <View style={styles.actions}>
+              <TouchableOpacity
+                style={styles.btn}
+                onPress={onDismiss}
+                activeOpacity={0.6}
+              >
+                <Text style={[styles.btnText, { color: accentColor }]}>Đồng ý</Text>
+              </TouchableOpacity>
+            </View>
           </Pressable>
         </Animated.View>
       </Pressable>
@@ -71,58 +76,55 @@ export function FeedbackModal({ visible, type, title, message, onDismiss }: Feed
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: '#0A0E1E8C',
+    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 20,
   },
   box: {
-    width: '82%',
-    maxWidth: 320,
+    width: '100%',
+    maxWidth: 420,
     backgroundColor: '#ffffff',
-    borderRadius: 20,
-    overflow: 'hidden',
+    borderRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 16,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
   },
-  iconSection: {
+  header: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 28,
-    paddingBottom: 12,
-  },
-  iconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  textSection: {
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingBottom: 24,
+    gap: 12,
   },
   title: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111827',
-    marginBottom: 6,
-    textAlign: 'center',
+    flex: 1,
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#11181C',
   },
   message: {
-    fontSize: 13,
-    color: '#6B7280',
-    textAlign: 'center',
+    fontSize: 13.5,
+    color: '#64748B',
     lineHeight: 20,
+    textAlign: 'left',
+    marginTop: 22,
   },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#E5E7EB',
+  chip: { fontWeight: '700', color: '#1F5CA9' },
+  actions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 24,
   },
   btn: {
-    paddingVertical: 14,
-    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 6,
   },
   btnText: {
-    fontSize: 15,
-    fontWeight: '500',
-    letterSpacing: 0.2,
+    fontSize: 16,
+    fontWeight: '700',
   },
 });

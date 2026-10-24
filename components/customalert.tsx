@@ -89,5 +89,6 @@ const styles = StyleSheet.create({
   message: {
     fontSize: 14,
     fontWeight: '500',
+    textAlign: 'justify',
   },
 });

@@ -15,12 +15,17 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    ```bash
    npx expo start
    ```
-3. Build apk preview
+3. Build apk
 
    ```bash
    eas build --platform android --profile preview
    eas build --platform android --profile development
    ```   
+4. Prebuild
+
+   ```bash
+   npx expo prebuild -p android
+   ```
 
 ## Get a fresh project
 

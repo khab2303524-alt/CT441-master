@@ -21,6 +21,7 @@ import { FeedbackModal } from '../../components/feedbackmodal';
 import ScrollPicker from '../../components/scrollpicker';
 import { db } from '../../config/firebaseConfig';
 import { useESPConnection } from '../../hooks';
+import { useDeviceOnline } from '../../hooks/use-device-online';
 
 const DAYS_LABEL = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 
@@ -93,6 +94,9 @@ export default function ScheduleScreen() {
   const bottomSheetAnim = useRef(new Animated.Value(300)).current;
 
   useESPConnection();
+
+  // Theo dõi kết nối thiết bị; alert mất kết nối / kết nối lại do hook hiển thị chung cho cả app
+  useDeviceOnline();
 
   // Tự động khôi phục báo thức khi rời khỏi màn hình này (chuyển tab clock/settings)
   // Chỉ khôi phục nếu đang ở tab "manual" và có báo thức đang bị tạm tắt
@@ -601,7 +605,7 @@ export default function ScheduleScreen() {
                     {bottomSheetTarget.note || 'Không có ghi chú'}
                   </Text>
                   <Text style={styles.bsDaysLabel}>
-                    <FontAwesome6 name="rotate" size={11} color="#fff200" />
+                    <FontAwesome6 name="rotate" size={11} color="#ffbb00"/>
                     {'  '}{formatDaysLabel(bottomSheetTarget.days)}
                   </Text>
                 </View>
@@ -976,7 +980,7 @@ const styles = StyleSheet.create({
   bsInfoTime: { fontSize: 40, fontWeight: '800', color: '#1F5CA9', letterSpacing: 1 },
   bsInfoNote: { fontSize: 15, fontWeight: '500', color: '#00AFE1' },
   bsInfoNotePlaceholder: { fontSize: 15, fontWeight: '400', color: '#A0AEC0' },
-  bsDaysLabel: { fontSize: 13, fontWeight: '500', color: '#fff200' },
+  bsDaysLabel: { fontSize: 13, fontWeight: '500', color: '#ffbb00' },
   bottomSheetDivider: { height: 1, backgroundColor: '#F0F4F8', marginBottom: 16 },
   bottomSheetDeleteBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

@@ -13,6 +13,7 @@ import {
 import ScrollPicker from '../../components/scrollpicker';
 import { db } from '../../config/firebaseConfig';
 import { notifyManualTimeChange, useCustomAlert, useESPConnection, useESPTime } from '../../hooks';
+import { useDeviceOnline } from '../../hooks/use-device-online';
 
 const DAY_NAMES = ['Chủ nhật', 'Thứ hai', 'Thứ ba', 'Thứ tư', 'Thứ năm', 'Thứ sáu', 'Thứ bảy'];
 
@@ -39,6 +40,9 @@ export default function ClockScreen() {
   const timeData = useESPTime();
   const { showSuccess, showError } = useCustomAlert();
 
+  // Theo dõi kết nối thiết bị; alert mất kết nối / kết nối lại do hook hiển thị chung cho cả app
+  useDeviceOnline();
+
   // "Neo" thời gian lưu dưới dạng epoch (ms) quy đổi từ Gio/Phut/Giay/Ngay/Thang/Nam,
   // kèm thời điểm nhận nó theo đồng hồ máy (Date.now()).
   // Sở dĩ dùng epoch thay vì lưu riêng từng trường là để cộng trừ/tràn ngày-tháng-năm
@@ -49,6 +53,21 @@ export default function ClockScreen() {
   // Sai lệch nhỏ hơn ngưỡng này chỉ là do độ trễ mạng/Firebase -> BỎ QUA, không nhảy số,
   // để tick nội bộ tiếp tục chạy mượt thay vì giật lùi rồi đếm lên lại.
   const RESYNC_THRESHOLD_MS = 1500;
+
+  // Quá 30s không thấy giây từ thiết bị thay đổi -> coi như thiết bị không còn gửi giờ,
+  // app tự lấy giờ mạng (NTP). Giờ điện thoại do hệ điều hành đồng bộ NTP nên dùng Date.now().
+  const STALE_MS = 30000;
+  const lastChangeRef = useRef<number>(Date.now()); // lần cuối thấy giờ từ thiết bị đổi
+  const lastRawEpochRef = useRef<number | null>(null); // giờ thô gần nhất nhận từ thiết bị
+  const ntpModeRef = useRef(false);
+  // Vừa mở app, Firebase trả ngay giờ cũ lần cuối. ESP đẩy giờ mỗi giây nên nếu sau
+  // INITIAL_STALE_MS vẫn chưa thấy giờ đổi lần nào thì thiết bị đã tắt -> chuyển NTP sớm.
+  // Khi đã thấy giờ đổi ít nhất 1 lần (thiết bị đang sống) thì dùng ngưỡng STALE_MS (30s).
+  const INITIAL_STALE_MS = 5000;
+  const seenChangeRef = useRef(false);
+  const isDeviceStale = (now: number) =>
+    now - lastChangeRef.current > (seenChangeRef.current ? STALE_MS : INITIAL_STALE_MS);
+  const [isNtpMode, setIsNtpMode] = useState(false);
 
   const toEpochMs = (d: { Gio: number; Phut: number; Giay: number; Ngay: number; Thang: number; Nam: number }) =>
     new Date(d.Nam, d.Thang - 1, d.Ngay, d.Gio, d.Phut, d.Giay).getTime();
@@ -72,6 +91,21 @@ export default function ClockScreen() {
     if (!timeData) return;
     const { Gio, Phut, Giay, Ngay, Thang, Nam } = timeData;
     const newEpochMs = toEpochMs({ Gio, Phut, Giay, Ngay, Thang, Nam });
+    if (!Number.isFinite(newEpochMs)) return;
+
+    // Giây/giờ từ thiết bị có đổi so với lần trước -> thiết bị còn sống
+    if (newEpochMs !== lastRawEpochRef.current) {
+      if (lastRawEpochRef.current !== null) seenChangeRef.current = true; // giá trị thứ 2 trở đi = thiết bị đang gửi
+      lastRawEpochRef.current = newEpochMs;
+      lastChangeRef.current = Date.now();
+      if (ntpModeRef.current) {
+        // Thiết bị gửi giờ lại: thoát chế độ NTP, xóa neo để ép resync ngay bên dưới
+        ntpModeRef.current = false;
+        setIsNtpMode(false);
+        anchorRef.current = null;
+      }
+    }
+
     const now = Date.now();
     const anchor = anchorRef.current;
 
@@ -100,9 +134,22 @@ export default function ClockScreen() {
   // Tick nội bộ mỗi 1s dựa trên Date.now() của máy, độc lập với tần suất Firebase gửi.
   useEffect(() => {
     const interval = setInterval(() => {
+      const now = Date.now();
+
+      // Quá STALE_MS không thấy giờ thiết bị đổi -> dùng giờ mạng (NTP)
+      if (isDeviceStale(now)) {
+        if (!ntpModeRef.current) {
+          ntpModeRef.current = true;
+          setIsNtpMode(true);
+          anchorRef.current = null;
+        }
+        applyDisplayFromEpoch(now);
+        return;
+      }
+
       const anchor = anchorRef.current;
       if (!anchor) return;
-      applyDisplayFromEpoch(anchor.epochMs + (Date.now() - anchor.receivedAtMs));
+      applyDisplayFromEpoch(anchor.epochMs + (now - anchor.receivedAtMs));
     }, 1000);
 
     return () => clearInterval(interval);
@@ -196,15 +243,19 @@ export default function ClockScreen() {
           <View style={styles.clockCard}>
             <View style={styles.timeWrapper}>
               <Text style={styles.timeDisplay}>{time}</Text>
-              <View style={styles.secondsContainer}>
-                <Text style={styles.secondsDisplay}>{seconds}s</Text>
-              </View>
             </View>
 
             <View style={styles.dateContainer}>
               <FontAwesome6 name="calendar-day" size={13} color="#1F5CA9" style={{ marginRight: 8 }} />
               <Text style={styles.dateDisplay}>{dateStr}</Text>
             </View>
+
+            {isNtpMode && (
+              <View style={styles.ntpBadge}>
+                <FontAwesome6 name="globe" size={11} color="#B45309" style={{ marginRight: 6 }} />
+                <Text style={styles.ntpBadgeText}>Thiết bị không gửi giờ - đang dùng giờ mạng (NTP)</Text>
+              </View>
+            )}
           </View>
 
           <View style={styles.sectionLabelContainer}>
@@ -467,10 +518,12 @@ const styles = StyleSheet.create({
   timeWrapper: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', marginVertical: 4 },
   secondsContainer: { marginLeft: 6, marginBottom: 14, width: 48, alignItems: 'flex-start' },
   secondsDisplay: { fontSize: 24, fontWeight: '800', color: '#00AFEF', fontVariant: ['tabular-nums'] },
-  timeDisplay: { fontSize: 72, fontWeight: '900', color: '#1F5CA9', letterSpacing: -1, fontVariant: ['tabular-nums'] },
+  timeDisplay: { fontSize: 84, fontWeight: '900', color: '#1F5CA9', letterSpacing: -1, fontVariant: ['tabular-nums'] },
 
   dateContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 14, backgroundColor: '#F1F5F9', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 100 },
   dateDisplay: { fontSize: 13, color: '#475569', fontWeight: '700' },
+  ntpBadge: { flexDirection: 'row', alignItems: 'center', marginTop: 10, backgroundColor: '#FEF3C7', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 100 },
+  ntpBadgeText: { fontSize: 11, fontWeight: '700', color: '#B45309' },
 
   sectionLabelContainer: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4, paddingHorizontal: 4 },
   sectionLabel: { fontSize: 12, fontWeight: '900', color: '#1F5CA9', letterSpacing: 1 },

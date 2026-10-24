@@ -1,12 +1,9 @@
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Buffer } from 'buffer';
-import { get, onValue, ref, update } from 'firebase/database';
+import { onValue, ref, update } from 'firebase/database';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  AppState,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -19,23 +16,24 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { BleManager } from 'react-native-ble-plx'; // Import Bluetooth BLE
 
 import { FeedbackModal } from '../../components/feedbackmodal';
 import { db } from '../../config/firebaseConfig';
 import { useESPConnection } from '../../hooks';
-
-type WifiItem = { ssid: string; rssi: number };
-const WIFI_CACHE_KEY = 'settings_wifi_cache_v1';
-
-// Cấu hình Bluetooth UUID trùng với dưới ESP32
-const bleManager = new BleManager();
-const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+import { useDeviceOnline } from '../../hooks/use-device-online';
+import { sendWifiConfigViaAP } from '../../lib/ap-wifi-service';
+import { isValidPin, PIN_LENGTH, savePin, verifyPin } from '../../lib/pin-lock';
 
 // Người dùng nhập/thấy độ sáng theo thang 0-100, nhưng thiết bị chỉ nhận tối đa 200
 const BRIGHTNESS_UI_MAX = 100;
 const BRIGHTNESS_DEVICE_MAX = 200;
+
+// Đổi dấu chấm tròn "•" ở đầu dòng thành dấu "-", các dòng khác giữ nguyên
+const formatLoiGach = (msg: string): string =>
+  msg
+    .split('\n')
+    .map(line => line.replace(/^\s*[•·●]\s*/, '- '))
+    .join('\n');
 
 // Quy đổi giá trị người dùng nhập (0-100) sang giá trị gửi xuống thiết bị (0-200)
 const uiToDeviceBrightness = (uiVal: number): number => {
@@ -49,22 +47,30 @@ const deviceToUiBrightness = (deviceVal: number): number => {
   return Math.round((clamped * BRIGHTNESS_UI_MAX) / BRIGHTNESS_DEVICE_MAX);
 };
 
-const normalizeWifiList = (raw: unknown): WifiItem[] => {
-  if (Array.isArray(raw)) {
-    return raw.filter((x): x is WifiItem => (
-      !!x && typeof x === 'object' && typeof (x as WifiItem).ssid === 'string' && typeof (x as WifiItem).rssi === 'number'
-    ));
-  }
-  if (raw && typeof raw === 'object') {
-    return Object.values(raw).filter((x): x is WifiItem => (
-      !!x && typeof x === 'object' && typeof (x as WifiItem).ssid === 'string' && typeof (x as WifiItem).rssi === 'number'
-    ));
-  }
-  if (typeof raw === 'string') {
-    try { const parsed = JSON.parse(raw); return normalizeWifiList(parsed); } catch (_) { return []; }
-  }
-  return [];
-};
+const GuideStep = ({
+  index,
+  title,
+  isLast,
+  children,
+}: {
+  index: number;
+  title: string;
+  isLast?: boolean;
+  children: React.ReactNode;
+}) => (
+  <View style={styles.guideStep}>
+    <View style={styles.guideLeft}>
+      <View style={styles.guideBadge}>
+        <Text style={styles.guideBadgeText}>{index}</Text>
+      </View>
+      {!isLast && <View style={styles.guideLine} />}
+    </View>
+    <View style={[styles.guideContent, !isLast && { paddingBottom: 16 }]}>
+      <Text style={styles.guideStepTitle}>{title}</Text>
+      <Text style={styles.guideStepText}>{children}</Text>
+    </View>
+  </View>
+);
 
 export default function SettingsScreen() {
   useESPConnection();
@@ -72,33 +78,11 @@ export default function SettingsScreen() {
   const scrollRef = useRef<any>(null);
   const [currentSsid, setCurrentSsid] = useState<string | null>(null);
 
-  // WiFi scan states
-  const [dangQuet, setDangQuet] = useState(false);
-  const [danhSachWifi, setDanhSachWifi] = useState<WifiItem[]>([]);
-  const [daCo1LanQuet, setDaCo1LanQuet] = useState(false);
-  const quetPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Password modal states
-  // wifiStep điều khiển nội dung hiển thị BÊN TRONG modal wifi (list | password)
-  // thay vì dùng 1 Modal riêng cho phần nhập mật khẩu — tránh việc 2 Modal native
-  // (list & password) cùng tồn tại trong lúc transition khiến modal này đè lên modal kia
-  // thay vì đóng hẳn modal danh sách.
-  const [wifiStep, setWifiStep] = useState<'list' | 'password'>('list');
-  const [selectedSsid, setSelectedSsid] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-
-  // BLE states độc lập
-  const [bleSsid, setBleSsid] = useState('');
-  const [blePassword, setBlePassword] = useState('');
-  const [showBlePassword, setShowBlePassword] = useState(false);
-
-  const [dangKiemTra, setDangKiemTra] = useState(false);
-  const [dangKetNoiBle, setDangKetNoiBle] = useState(false); // Trạng thái nạp BLE
-  const [statusText, setStatusText] = useState('Đang kiểm tra...');
-  const trangThaiUnsub = useRef<(() => void) | null>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const bleDeviceFoundRef = useRef(false);
+  // AP Wi-Fi setup states
+  const [wifiSsidInput, setWifiSsidInput] = useState('');
+  const [wifiPassInput, setWifiPassInput] = useState('');
+  const [showWifiPass, setShowWifiPass] = useState(false);
+  const [isSendingAP, setIsSendingAP] = useState(false);
 
   const [brightness, setBrightness] = useState(100);
   const [savedBrightness, setSavedBrightness] = useState(100);
@@ -107,6 +91,20 @@ export default function SettingsScreen() {
   const [ringDuration, setRingDuration] = useState(5);
   const [savedRingDuration, setSavedRingDuration] = useState(5);
   const [ringDurationInput, setRingDurationInput] = useState('5');
+
+  // Định dạng hiển thị giờ trên đồng hồ: true = 24 giờ, false = 12 giờ (AM/PM)
+  const [dinhDang24Gio, setDinhDang24Gio] = useState(true);
+  const [savedDinhDang24Gio, setSavedDinhDang24Gio] = useState(true);
+  const [dinhDang24GioInput, setDinhDang24GioInput] = useState(true);
+
+  // Đổi mã PIN khóa app
+  const [currentPinInput, setCurrentPinInput] = useState('');
+  const [newPinInput, setNewPinInput] = useState('');
+  const [confirmPinInput, setConfirmPinInput] = useState('');
+  const [dangDoiPin, setDangDoiPin] = useState(false);
+  const [showCurrentPin, setShowCurrentPin] = useState(false);
+  const [showNewPin, setShowNewPin] = useState(false);
+  const [showConfirmPin, setShowConfirmPin] = useState(false);
 
   const [feedbackModal, setFeedbackModal] = useState<{
     visible: boolean; type: 'success' | 'error'; title: string; message: string;
@@ -118,26 +116,11 @@ export default function SettingsScreen() {
     setFeedbackModal({ visible: true, type: 'error', title, message });
   const hideFeedback = () => setFeedbackModal(prev => ({ ...prev, visible: false }));
 
-  const [thietBiOnline, setThietBiOnline] = useState(true);
-  const lastHeartbeatRef = useRef<number>(Date.now());
-  const tungMatKetNoiRef = useRef(false);
+  // Trạng thái online dùng chung toàn app. Alert mất kết nối / kết nối lại do hook tự hiển thị
+  // (1 lần cho cả app); thietBiOnline ở đây dùng cho badge trong modal Wi-Fi.
+  const thietBiOnline = useDeviceOnline();
 
   useEffect(() => {
-    const loadWifiCache = async () => {
-      try {
-        const raw = await AsyncStorage.getItem(WIFI_CACHE_KEY);
-        if (!raw) return;
-        const parsed = JSON.parse(raw);
-        const list = normalizeWifiList(parsed);
-        if (list.length > 0) {
-          setDanhSachWifi(list);
-          setDaCo1LanQuet(true);
-        }
-      } catch (_) { }
-    };
-
-    loadWifiCache();
-
     const unsubWifi = onValue(ref(db, 'WiFi/ssidHienTai'), (snap) => {
       const val = snap.val();
       if (typeof val === 'string' && val.length > 0) setCurrentSsid(val);
@@ -159,224 +142,39 @@ export default function SettingsScreen() {
         setRingDurationInput(String(val));
       }
     });
-    const unsubHeartbeat = onValue(ref(db, 'DongHo/Heartbeat'), (snap) => {
-      if (snap.val() === null) return;
-      lastHeartbeatRef.current = Date.now();
-      if (tungMatKetNoiRef.current) {
-        tungMatKetNoiRef.current = false;
-        setThietBiOnline(true);
-        showSuccess('Đã kết nối lại', 'Thiết bị đã hoạt động trở lại.');
-      } else {
-        setThietBiOnline(true);
-      }
+    const unsubDinhDang = onValue(ref(db, 'DongHo/DinhDang24Gio'), (snap) => {
+      const val = snap.val();
+      const la24Gio = typeof val === 'boolean' ? val : true;
+      setDinhDang24Gio(la24Gio);
+      setSavedDinhDang24Gio(la24Gio);
+      setDinhDang24GioInput(la24Gio);
     });
-
-    const heartbeatCheckInterval = setInterval(() => {
-      const daImLang = Date.now() - lastHeartbeatRef.current;
-      if (daImLang > 10000 && !tungMatKetNoiRef.current) {
-        tungMatKetNoiRef.current = true;
-        setThietBiOnline(false);
-      }
-    }, 5000);
-
-    // Khi app quay lại foreground (mở lại app / chuyển tab về), thời gian ở nền
-    // không được tính là "mất kết nối" thật, nên reset mốc thời gian tại đây.
-    const appStateSub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
-        lastHeartbeatRef.current = Date.now();
-      }
-    });
-
     return () => {
-      unsubWifi(); unsubBright(); unsubRing(); unsubHeartbeat();
-      clearInterval(heartbeatCheckInterval);
-      appStateSub.remove();
+      unsubWifi(); unsubBright(); unsubRing(); unsubDinhDang();
     };
   }, []);
 
-  useEffect(() => {
-    return () => {
-      trangThaiUnsub.current?.();
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      if (quetPollRef.current) clearInterval(quetPollRef.current);
-    };
-  }, []);
-
-  const stopListening = () => {
-    trangThaiUnsub.current?.();
-    trangThaiUnsub.current = null;
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = null;
-  };
-
-  const startTimeout = (ms: number, label: string) => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      stopListening();
-      setDangKiemTra(false);
-      showError('Hết thời gian', `${label}\nKiểm tra thiết bị có đang bật không.`);
-    }, ms);
-  };
-
-  // Hàm kết nối thông thường qua đám mây Firebase
-  const handleSaveWifi = async () => {
+  const handleSendWifiAP = async () => {
     Keyboard.dismiss();
-    if (!selectedSsid.trim()) { showError('Chưa chọn Wi-Fi', 'Vui lòng quét và chọn mạng Wi-Fi'); return; }
-    if (dangKiemTra) return;
-    setWifiStep('list');
-    try {
-      await update(ref(db, 'WiFi'), {
-        ssid: selectedSsid.trim(),
-        password: password,
-        capNhat: true,
-        trangThai: 'choDoi',
-      });
-      setPassword('');
-      setDangKiemTra(true);
-      setStatusText('Chờ thiết bị phản hồi...');
-      startTimeout(30000, 'Chưa nhận được lệnh đổi Wi-Fi.');
-
-      const pollInterval = setInterval(async () => {
-        try {
-          const snap = await get(ref(db, 'WiFi/trangThai'));
-          const val = snap.val() as string;
-          if (!val || val === 'choDoi') return;
-          if (val === 'dangKetNoi') {
-            setStatusText('Đang kết nối Wi-Fi mới...');
-            startTimeout(30000, 'Không kết nối được Wi-Fi.');
-            return;
-          }
-          clearInterval(pollInterval);
-          stopListening();
-          setDangKiemTra(false);
-          if (val === 'thanhCong') {
-            showSuccess('Kết nối thành công', 'Đã kết nối Wi-Fi mới.\nThiết bị sẽ tự khởi động lại.');
-          } else if (val === 'thatBai') {
-            showError('Kết nối thất bại', 'Sai mật khẩu hoặc không tìm thấy mạng. Tiếp tục dùng Wi-Fi cũ.');
-          }
-        } catch (_) { }
-      }, 1500);
-      trangThaiUnsub.current = () => clearInterval(pollInterval);
-    } catch (e: any) { showError('Lỗi Firebase', e.message); }
-  };
-
-  // Hàm kết nối bằng Bluetooth BLE lấy từ ô nhập tay
-  const handleConfigViaBluetooth = () => {
-    Keyboard.dismiss();
-
-    if (!bleSsid.trim()) {
-      showError('Thiếu thông tin', 'Vui lòng nhập tên mạng Wi-Fi (SSID).');
+    if (!wifiSsidInput.trim()) {
+      showError('Chưa nhập tên Wi-Fi', 'Vui lòng nhập tên mạng Wi-Fi.');
       return;
     }
-
-    if (!blePassword.trim()) {
-      showError('Thiếu thông tin', 'Vui lòng nhập mật khẩu Wi-Fi.');
-      return;
-    }
-
-    bleDeviceFoundRef.current = false;
-    setDangKetNoiBle(true);
-    showSuccess('Đang kết nối BLE', 'Đưa điện thoại lại gần đồng hồ và bật Bluetooth + Location...');
-
-    bleManager.startDeviceScan(null, null, async (error, device) => {
-      if (error) {
-        setDangKetNoiBle(false);
-        showError('Lỗi Bluetooth', 'Không thể quét BLE. Kiểm tra quyền Bluetooth + Location.');
-        bleManager.stopDeviceScan();
-        return;
-      }
-
-      if (device && (device.name === 'WIFI_SETUP' || device.localName === 'WIFI_SETUP')) {
-        bleDeviceFoundRef.current = true;
-        bleManager.stopDeviceScan();
-
-        try {
-          const connectedDevice = await device.connect();
-          await connectedDevice.discoverAllServicesAndCharacteristics();
-
-          const rawPayload = `${bleSsid.trim()}|${blePassword}`;
-
-          const base64Payload = Buffer.from(rawPayload, 'utf-8').toString('base64');
-
-          await connectedDevice.writeCharacteristicWithResponseForService(
-            SERVICE_UUID,
-            CHARACTERISTIC_UUID,
-            base64Payload
-          );
-
-          await connectedDevice.cancelConnection();
-
-          setDangKetNoiBle(false);
-          setBlePassword('');
-          setExpandedCard(null);
-
-          showSuccess(
-            'Gửi BLE thành công',
-            'Đồng hồ đã nhận Wi-Fi.\nĐang thử kết nối...'
-          );
-
-        } catch (err: any) {
-          setDangKetNoiBle(false);
-          showError(
-            'Lỗi BLE',
-            'Không ghi được dữ liệu: ' + err.message
-          );
-        }
-      }
-
-    });
-
-    setTimeout(() => {
-      bleManager.stopDeviceScan();
-      if (!bleDeviceFoundRef.current) {
-        setDangKetNoiBle(false);
-        showError(
-          'Không tìm thấy thiết bị',
-          'Không tìm thấy đồng hồ qua Bluetooth. Thiết bị có thể chưa chuyển sang chế độ dự phòng BLE, vui lòng đợi thêm ít phút rồi thử lại.'
-        );
-      }
-    }, 20000);
-  };
-
-  const handleQuetWifi = async () => {
-    if (dangQuet) return;
-    setDangQuet(true);
-    try {
-      await update(ref(db, 'WiFi'), { quetLuoi: true });
-      if (quetPollRef.current) clearInterval(quetPollRef.current);
-      quetPollRef.current = setInterval(async () => {
-        try {
-          const snap = await get(ref(db, 'WiFi/quetLuoi'));
-          if (snap.val() === false || snap.val() === null) {
-            clearInterval(quetPollRef.current!);
-            quetPollRef.current = null;
-            const snapList = await get(ref(db, 'WiFi/danhSachWifi'));
-            const list = normalizeWifiList(snapList.val());
-            setDanhSachWifi(list);
-            await AsyncStorage.setItem(WIFI_CACHE_KEY, JSON.stringify(list));
-            setDangQuet(false);
-            setDaCo1LanQuet(true);
-          }
-        } catch (_) { }
-      }, 1500);
-    } catch (e: any) {
-      setDangQuet(false);
-      showError('Lỗi Firebase', (e as any).message);
+    setIsSendingAP(true);
+    const result = await sendWifiConfigViaAP(wifiSsidInput.trim(), wifiPassInput);
+    setIsSendingAP(false);
+    if (result.success) {
+      setExpandedCard(null);
+      setWifiPassInput('');
+      showSuccess('Gửi thành công', result.message);
+    } else {
+      showError('Gửi thất bại', formatLoiGach(result.message));
     }
   };
 
-  const handleChonWifi = (item: WifiItem) => {
-    setSelectedSsid(item.ssid);
-    setPassword('');
-    setShowPassword(false);
-    setWifiStep('password');
-  };
-
-  // Quay lại danh sách wifi (không đóng hẳn modal, tránh mở/đóng 2 Modal cùng lúc)
-  const closePasswordModal = () => {
-    setWifiStep('list');
-    setPassword('');
-    setShowPassword(false);
+  const handleCloseWifiModal = () => {
+    Keyboard.dismiss();
+    setExpandedCard(null);
   };
 
   const handleSaveBrightness = async () => {
@@ -394,14 +192,6 @@ export default function SettingsScreen() {
       setExpandedCard(null);
       showSuccess('Đã lưu', `Độ sáng LED: ${num}%`);
     } catch (e: any) { showError('Lỗi Firebase', e.message); }
-  };
-
-  const handleCancelBle = () => {
-    Keyboard.dismiss();
-    setBleSsid('');
-    setBlePassword('');
-    setShowBlePassword(false);
-    setExpandedCard(null);
   };
 
   const handleCancelBrightness = () => {
@@ -432,17 +222,101 @@ export default function SettingsScreen() {
     setExpandedCard(null);
   };
 
+  const handleSaveDinhDang = async () => {
+    try {
+      await update(ref(db, 'DongHo'), { DinhDang24Gio: dinhDang24GioInput });
+      setDinhDang24Gio(dinhDang24GioInput);
+      setSavedDinhDang24Gio(dinhDang24GioInput);
+      setExpandedCard(null);
+      showSuccess('Đã lưu', 'Định dạng giờ đã được cập nhật.');
+    } catch (e: any) { showError('Lỗi Firebase', e.message); }
+  };
+
+  const handleCancelDinhDang = () => {
+    setDinhDang24GioInput(savedDinhDang24Gio);
+    setExpandedCard(null);
+  };
+
+  const handleCancelPin = () => {
+    Keyboard.dismiss();
+    setCurrentPinInput('');
+    setNewPinInput('');
+    setConfirmPinInput('');
+    setShowCurrentPin(false);
+    setShowNewPin(false);
+    setShowConfirmPin(false);
+    setExpandedCard(null);
+  };
+
+  const handleSavePin = async () => {
+    Keyboard.dismiss();
+    if (dangDoiPin) return;
+
+    if (!isValidPin(currentPinInput)) {
+      showError('Mã PIN không hợp lệ', 'Vui lòng nhập đủ 6 chữ số của mã PIN hiện tại.');
+      return;
+    }
+    if (!isValidPin(newPinInput)) {
+      showError('Mã PIN không hợp lệ', 'Mã PIN mới phải gồm đúng 6 chữ số.');
+      return;
+    }
+    if (newPinInput !== confirmPinInput) {
+      showError('Không khớp', 'Xác nhận mã PIN mới không khớp. Vui lòng nhập lại.');
+      return;
+    }
+    if (newPinInput === currentPinInput) {
+      showError('Không hợp lệ', 'Mã PIN mới phải khác mã PIN hiện tại.');
+      return;
+    }
+
+    setDangDoiPin(true);
+    try {
+      const dung = await verifyPin(currentPinInput);
+      if (!dung) {
+        showError('Sai mã PIN', 'Mã PIN hiện tại không đúng.');
+        return;
+      }
+      await savePin(newPinInput);
+      setCurrentPinInput('');
+      setNewPinInput('');
+      setConfirmPinInput('');
+      setShowCurrentPin(false);
+      setShowNewPin(false);
+      setShowConfirmPin(false);
+      setExpandedCard(null);
+      showSuccess('Đã đổi mã PIN', 'Mã PIN mới sẽ được dùng cho lần mở khóa app tiếp theo.');
+    } catch (e: any) {
+      showError('Lỗi', e?.message ?? 'Không thể đổi mã PIN, vui lòng thử lại.');
+    } finally {
+      setDangDoiPin(false);
+    }
+  };
+
   const parsedBrightnessInput = parseInt(brightnessInput, 10);
   const brightnessChanged = !isNaN(parsedBrightnessInput) && parsedBrightnessInput !== savedBrightness;
 
   const parsedRingInput = parseInt(ringDurationInput, 10);
   const ringDurationChanged = !isNaN(parsedRingInput) && parsedRingInput !== savedRingDuration;
 
-  const [expandedCard, setExpandedCard] = useState<'wifi' | 'brightness' | 'ring' | 'ble' | null>(null);
+  const dinhDangChanged = dinhDang24GioInput !== savedDinhDang24Gio;
 
-  const toggleCard = (card: 'wifi' | 'brightness' | 'ring' | 'ble') => {
+  const [expandedCard, setExpandedCard] = useState<'wifi' | 'brightness' | 'ring' | 'format' | 'pin' | null>(null);
+
+  const toggleCard = (card: 'wifi' | 'brightness' | 'ring' | 'format' | 'pin') => {
     Keyboard.dismiss();
-    if (card === 'wifi') setWifiStep('list');
+    if (card === 'wifi') {
+      setWifiSsidInput('');
+      setWifiPassInput('');
+    }
+    if (card === 'format') setDinhDang24GioInput(savedDinhDang24Gio);
+    if (card === 'pin') {
+      setCurrentPinInput('');
+      setNewPinInput('');
+      setConfirmPinInput('');
+      setShowCurrentPin(false);
+      setShowNewPin(false);
+      setShowConfirmPin(false);
+    }
     setExpandedCard(prev => {
       const next = prev === card ? null : card;
       return next;
@@ -469,22 +343,7 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.body}>
-          {!thietBiOnline && (
-            <View style={styles.offlineCard}>
-              <View style={styles.offlineCardHeader}>
-                <View style={styles.offlineIconBox}>
-                  <Ionicons name="warning" size={20} color="#DC2626" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.offlineCardTitle}>Mất kết nối</Text>
-                  <Text style={styles.offlineCardSubtitle}>
-                    Thử kiểm tra nguồn thiết bị hoặc Wi-Fi.
-                  </Text>
-                </View>
-              </View>
-            </View>
-          )}
-          {/* Card Wi-Fi */}
+          {/* Card Cấu hình Wi-Fi qua AP */}
           <Pressable onPress={(e) => e.stopPropagation()}>
             <View style={styles.card}>
               <TouchableOpacity
@@ -496,33 +355,29 @@ export default function SettingsScreen() {
                   <Ionicons name="wifi" size={20} color="#1F5CA9" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.cardTitle}>Kết nối Wi-Fi</Text>
-                  {currentSsid ? (
-                    <Text style={styles.cardSubtitle}>
-                      Hiện tại: <Text style={styles.cardSubtitleBold}>{currentSsid}</Text>
-                    </Text>
-                  ) : (
-                    <Text style={styles.cardSubtitle}>Chưa cấu hình</Text>
-                  )}
+                  <Text style={styles.cardTitle}>Cấu hình Wi-Fi</Text>
+                  <Text style={styles.cardSubtitle}>
+                    Hiện tại: <Text style={styles.cardSubtitleBold}>{currentSsid}</Text>
+                  </Text>
                 </View>
               </TouchableOpacity>
             </View>
           </Pressable>
-          
-          {/* Card Cấu hình độc lập qua Bluetooth BLE */}
+
+          {/* Card Định dạng giờ */}
           <Pressable onPress={(e) => e.stopPropagation()}>
             <View style={styles.card}>
               <TouchableOpacity
                 style={styles.cardHeader}
-                onPress={() => toggleCard('ble')}
+                onPress={() => toggleCard('format')}
                 activeOpacity={0.7}
               >
-                <View style={[styles.cardIconBox, { backgroundColor: '#E2F1FF' }]}>
-                  <Ionicons name="bluetooth" size={20} color="#1F5CA9" />
+                <View style={styles.cardIconBox}>
+                  <Ionicons name="time" size={20} color="#1F5CA9" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.cardTitle}>Gửi Wi-Fi qua Bluetooth</Text>
-                  <Text style={styles.cardSubtitle}>Dùng khi Wi-Fi trước đó không thể kết nối được nữa. Khởi động lại thiết bị trước khi dùng.</Text>
+                  <Text style={styles.cardTitle}>Định dạng giờ</Text>
+                  <Text style={styles.cardSubtitle}>Hiện tại: {dinhDang24Gio ? '24 giờ' : '12 giờ (AM/PM)'}</Text>
                 </View>
               </TouchableOpacity>
             </View>
@@ -565,266 +420,152 @@ export default function SettingsScreen() {
               </TouchableOpacity>
             </View>
           </Pressable>
+
+          {/* Card Đổi mã PIN khóa app */}
+          <Pressable onPress={(e) => e.stopPropagation()}>
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={styles.cardHeader}
+                onPress={() => toggleCard('pin')}
+                activeOpacity={0.7}
+              >
+                <View style={styles.cardIconBox}>
+                  <Ionicons name="lock-closed" size={20} color="#1F5CA9" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>Đổi mã PIN</Text>
+                  <Text style={styles.cardSubtitle}>Mã PIN 6 số dùng để mở khóa app</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
         </View>
       </ScrollView>
 
-      {/* Modal: Kết nối Wi-Fi (gộp 2 bước "danh sách" và "nhập mật khẩu" trong CÙNG 1 Modal
-          để tránh việc 2 Modal native mở/đóng cùng lúc gây đè chồng lên nhau) */}
+      {/* Modal: Cài đặt Wi-Fi qua AP (LED_P10) */}
       <Modal
         visible={expandedCard === 'wifi'}
         transparent
         animationType="fade"
-        onRequestClose={() => (wifiStep === 'password' ? closePasswordModal() : setExpandedCard(null))}
+        onRequestClose={handleCloseWifiModal}
       >
         <Pressable
           style={styles.modalOverlay}
-          onPress={() => (wifiStep === 'password' ? closePasswordModal() : setExpandedCard(null))}
+          onPress={handleCloseWifiModal}
         >
           <Pressable
-            style={wifiStep === 'list' ? styles.settingsModal : styles.passwordModal}
+            style={styles.wifiModal}
             onPress={(e) => e.stopPropagation()}
           >
-            {wifiStep === 'list' ? (
-              <>
-                <View style={styles.modalHeader}>
-                  <Ionicons name="wifi" size={22} color="#1F5CA9" />
-                  <Text style={styles.modalTitle} numberOfLines={1}>Kết nối Wi-Fi</Text>
-                  <TouchableOpacity
-                    onPress={() => setExpandedCard(null)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Ionicons name="close" size={22} color="#7A8FAD" />
-                  </TouchableOpacity>
+            <View style={styles.modalHeader}>
+              <Ionicons name="wifi" size={22} color="#1F5CA9" />
+              <Text style={styles.modalTitle} numberOfLines={1}>Cấu hình Wi-Fi</Text>
+              <TouchableOpacity
+                onPress={handleCloseWifiModal}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                disabled={isSendingAP}
+              >
+                <Ionicons name="close" size={22} color="#7A8FAD" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={styles.wifiModalScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Hướng dẫn 3 bước */}
+              <View style={styles.guideBox}>
+                <GuideStep index={1} title="Khởi động lại đồng hồ">
+                  Nếu chưa có Wi-Fi đã lưu hoặc mạng cũ bị lỗi, đồng hồ sẽ tự phát Wi-Fi tên{' '}
+                  <Text style={styles.guideChip}>LED_P10</Text>
+                </GuideStep>
+
+                <GuideStep index={2} title="Kết nối Wi-Fi của đồng hồ">
+                  Vào Cài đặt Wi-Fi của điện thoại, chọn mạng{' '}
+                  <Text style={styles.guideChip}>LED_P10</Text> (không cần mật khẩu).
+                </GuideStep>
+
+                <GuideStep index={3} title="Gửi thông tin Wi-Fi" isLast>
+                  Quay lại đây, nhập tên + mật khẩu Wi-Fi và nhấn{' '}
+                  <Text style={styles.guideHighlight}>Gửi</Text>.
+                </GuideStep>
+              </View>
+
+              {/* Nhập thông tin Wi-Fi */}
+              <View style={styles.wifiSection}>
+                <Text style={styles.tuneFieldLabel}>Tên Wi-Fi</Text>
+                <View style={styles.wifiInputWrap}>
+                  <TextInput
+                    style={styles.inputInner}
+                    placeholder="Nhập tên Wi-Fi"
+                    placeholderTextColor="#A0AEC0"
+                    value={wifiSsidInput}
+                    onChangeText={setWifiSsidInput}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!isSendingAP}
+                  />
                 </View>
 
-                <ScrollView
-                  style={styles.settingsModalScroll}
-                  keyboardShouldPersistTaps="handled"
-                  showsVerticalScrollIndicator={false}
-                >
-                  <View style={styles.scanRow}>
-                    <Text style={styles.scanRowLabel}>Mạng lân cận</Text>
-                    <TouchableOpacity
-                      onPress={handleQuetWifi}
-                      activeOpacity={0.6}
-                      disabled={dangQuet || dangKiemTra}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      {dangQuet ? (
-                        <ActivityIndicator size="small" color="#1F5CA9" />
-                      ) : (
-                        <Text style={styles.scanRowAction}>Làm mới</Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* Trạng thái đang kết nối */}
-                  {dangKiemTra && (
-                    <View style={styles.connectingBanner}>
-                      <ActivityIndicator size="small" color="#ffffff" />
-                      <Text style={styles.connectingText}>{statusText}</Text>
-                    </View>
-                  )}
-
-                  {/* Danh sách wifi quét được */}
-                  {danhSachWifi.length > 0 && (
-                    <View style={styles.wifiList}>
-                      {danhSachWifi.map((item, idx) => {
-                        const isSelected = item.ssid === currentSsid;
-                        const isSelectedOffline = isSelected && !thietBiOnline;
-                        const signalColor = isSelected ? (thietBiOnline ? '#1F5CA9' : '#64748B') : '#4A5568';
-                        return (
-                          <TouchableOpacity
-                            key={idx}
-                            style={[
-                              styles.wifiItem,
-                              isSelected && (isSelectedOffline ? styles.wifiItemActiveOffline : styles.wifiItemActive),
-                            ]}
-                            onPress={() => handleChonWifi(item)}
-                            activeOpacity={0.7}
-                            disabled={dangKiemTra}
-                          >
-                            <Ionicons name="wifi" size={20} color={signalColor} />
-                            <Text
-                              style={[
-                                styles.wifiItemName,
-                                isSelected && (isSelectedOffline ? styles.wifiItemNameOffline : styles.wifiItemNameActive),
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {item.ssid}
-                            </Text>
-                            {isSelected && (
-                              <View style={[styles.wifiItemBadge, !thietBiOnline && styles.wifiItemBadgeOffline]}>
-                                <Text style={[styles.wifiItemBadgeText, !thietBiOnline && styles.wifiItemBadgeTextOffline]}>
-                                  {thietBiOnline ? 'Đã kết nối' : 'Mất kết nối'}
-                                </Text>
-                              </View>
-                            )}
-                            <Ionicons name="chevron-forward" size={16} color="#C8D3E8" style={{ marginLeft: 'auto' }} />
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  )}
-
-                  {!dangQuet && daCo1LanQuet && danhSachWifi.length === 0 && (
-                    <Text style={styles.noWifiText}>Không tìm thấy mạng Wi-Fi nào.</Text>
-                  )}
-                </ScrollView>
-              </>
-            ) : (
-              <>
-                <View style={styles.modalHeader}>
-                  <TouchableOpacity
-                    onPress={closePasswordModal}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Ionicons name="chevron-back" size={22} color="#7A8FAD" />
-                  </TouchableOpacity>
-                  <Ionicons name="wifi" size={22} color="#1F5CA9" />
-                  <Text style={styles.modalTitle} numberOfLines={1}>{selectedSsid}</Text>
-                </View>
-                <Text style={styles.tuneFieldLabel}>Mật khẩu</Text>
+                <Text style={styles.tuneFieldLabel}>Mật khẩu Wi-Fi</Text>
                 <View style={styles.inputWithIcon}>
                   <TextInput
                     style={styles.inputInner}
-                    placeholder="Nhập mật khẩu Wi-Fi"
+                    placeholder="Nhập mật khẩu (nếu có)"
                     placeholderTextColor="#A0AEC0"
-                    value={password}
-                    onChangeText={setPassword}
-                    secureTextEntry={!showPassword}
+                    value={wifiPassInput}
+                    onChangeText={setWifiPassInput}
+                    secureTextEntry={!showWifiPass}
                     autoCapitalize="none"
                     autoCorrect={false}
-                    autoFocus
+                    editable={!isSendingAP}
                   />
                   <TouchableOpacity
                     style={styles.eyeInner}
-                    onPress={() => setShowPassword(p => !p)}
+                    onPress={() => setShowWifiPass(p => !p)}
                     activeOpacity={0.6}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
                     <Ionicons
-                      name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                      name={showWifiPass ? 'eye-off-outline' : 'eye-outline'}
                       size={19}
                       color="#7A8FAD"
                     />
                   </TouchableOpacity>
                 </View>
-
-                {/* Các nút hành động xử lý kết nối */}
-                <View style={styles.modalActions}>
-                  <TouchableOpacity
-                    style={styles.modalBottomButton}
-                    onPress={closePasswordModal}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.modalBottomButtonTextCancel}>Hủy</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.modalBottomButton}
-                    onPress={handleSaveWifi}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.modalBottomButtonTextSubmit}>Kết nối</Text>
-                  </TouchableOpacity>
-                </View>
-              </>
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* Modal: Gửi Wi-Fi qua Bluetooth */}
-      <Modal
-        visible={expandedCard === 'ble'}
-        transparent
-        animationType="fade"
-        onRequestClose={handleCancelBle}
-      >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
-        >
-          <Pressable style={styles.modalOverlay} onPress={handleCancelBle}>
-            <Pressable style={styles.settingsModal} onPress={(e) => e.stopPropagation()}>
-              <View style={styles.modalHeader}>
-                <Ionicons name="bluetooth" size={22} color="#1F5CA9" />
-                <Text style={styles.modalTitle} numberOfLines={1}>Gửi Wi-Fi qua Bluetooth</Text>
-                <TouchableOpacity
-                  onPress={handleCancelBle}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  disabled={dangKetNoiBle}
-                >
-                  <Ionicons name="close" size={22} color="#7A8FAD" />
-                </TouchableOpacity>
               </View>
 
-              <Text style={styles.tuneFieldLabel}>Tên Wi-Fi</Text>
-              <TextInput
-                style={styles.tuneInput}
-                value={bleSsid}
-                onChangeText={setBleSsid}
-                placeholder="Nhập tên Wi-Fi"
-                placeholderTextColor="#A0AEC0"
-              />
-
-              <Text style={styles.tuneFieldLabel}>Mật khẩu Wi-Fi</Text>
-              <View style={styles.inputWithIcon}>
-                <TextInput
-                  style={styles.inputInner}
-                  placeholder="Nhập mật khẩu Wi-Fi"
-                  placeholderTextColor="#A0AEC0"
-                  value={blePassword}
-                  onChangeText={setBlePassword}
-                  secureTextEntry={!showBlePassword}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
+              {/* Nút hành động */}
+              <View style={styles.modalActions}>
                 <TouchableOpacity
-                  style={styles.eyeInner}
-                  onPress={() => setShowBlePassword(p => !p)}
-                  activeOpacity={0.6}
-                >
-                  <Ionicons
-                    name={showBlePassword ? 'eye-off-outline' : 'eye-outline'}
-                    size={19}
-                    color="#7A8FAD"
-                  />
-                </TouchableOpacity>
-              </View>
-
-              <Text style={[styles.tuneHintText, { marginTop: 12 }]}>
-                Chú ý: nhập chính xác tên Wi-Fi và mật khẩu Wi-Fi trước khi nhấn kết nối.
-              </Text>
-
-              <View style={styles.tuneBottomActions}>
-                <TouchableOpacity
-                  style={styles.tuneBottomButton}
-                  onPress={handleCancelBle}
+                  style={styles.modalBottomButton}
+                  onPress={handleCloseWifiModal}
                   activeOpacity={0.7}
-                  disabled={dangKetNoiBle}
+                  disabled={isSendingAP}
                 >
-                  <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
+                  <Text style={styles.modalBottomButtonTextCancel}>Hủy</Text>
                 </TouchableOpacity>
+
                 <TouchableOpacity
-                  style={styles.tuneBottomButton}
-                  onPress={handleConfigViaBluetooth}
+                  style={[
+                    styles.modalBottomButton,
+                    (!wifiSsidInput.trim() || isSendingAP) && styles.modalBottomButtonDisabled,
+                  ]}
+                  onPress={handleSendWifiAP}
                   activeOpacity={0.7}
-                  disabled={dangKetNoiBle}
+                  disabled={!wifiSsidInput.trim() || isSendingAP}
                 >
-                  {dangKetNoiBle ? (
+                  {isSendingAP ? (
                     <ActivityIndicator size="small" color="#1F5CA9" />
                   ) : (
-                    <Text style={styles.tuneBottomButtonTextSubmit}>Kết nối</Text>
+                    <Text style={styles.modalBottomButtonTextSubmit}>Gửi</Text>
                   )}
                 </TouchableOpacity>
               </View>
-            </Pressable>
+            </ScrollView>
           </Pressable>
-        </KeyboardAvoidingView>
+        </Pressable>
       </Modal>
 
       {/* Modal: Độ sáng LED */}
@@ -941,6 +682,209 @@ export default function SettingsScreen() {
                 disabled={!ringDurationChanged}
               >
                 <Text style={[styles.tuneBottomButtonTextSubmit, !ringDurationChanged && styles.tuneBottomButtonTextDisabled]}>Xong</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal: Định dạng giờ */}
+      <Modal
+        visible={expandedCard === 'format'}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCancelDinhDang}
+      >
+        <Pressable style={styles.modalOverlay} onPress={handleCancelDinhDang}>
+          <Pressable style={styles.settingsModal} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="time" size={22} color="#1F5CA9" />
+              <Text style={styles.modalTitle} numberOfLines={1}>Định dạng giờ</Text>
+              <TouchableOpacity
+                onPress={handleCancelDinhDang}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={22} color="#7A8FAD" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.tuneFieldLabel}>Chọn định dạng hiển thị trên đồng hồ</Text>
+            <View style={styles.formatRow}>
+              <TouchableOpacity
+                style={[styles.formatOption, dinhDang24GioInput && styles.formatOptionActive]}
+                onPress={() => setDinhDang24GioInput(true)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.formatOptionText, dinhDang24GioInput && styles.formatOptionTextActive]}>
+                  24 giờ
+                </Text>
+                <Text style={[styles.formatOptionHint, dinhDang24GioInput && styles.formatOptionTextActive]}>
+                  VD: 14:05
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.formatOption, !dinhDang24GioInput && styles.formatOptionActive]}
+                onPress={() => setDinhDang24GioInput(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.formatOptionText, !dinhDang24GioInput && styles.formatOptionTextActive]}>
+                  12 giờ
+                </Text>
+                <Text style={[styles.formatOptionHint, !dinhDang24GioInput && styles.formatOptionTextActive]}>
+                  VD: 02:05
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.tuneBottomActions}>
+              <TouchableOpacity
+                style={styles.tuneBottomButton}
+                onPress={handleCancelDinhDang}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.tuneBottomButton}
+                onPress={handleSaveDinhDang}
+                activeOpacity={0.7}
+                disabled={!dinhDangChanged}
+              >
+                <Text style={[styles.tuneBottomButtonTextSubmit, !dinhDangChanged && styles.tuneBottomButtonTextDisabled]}>Xong</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal: Đổi mã PIN khóa app */}
+      <Modal
+        visible={expandedCard === 'pin'}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCancelPin}
+      >
+        <Pressable style={styles.modalOverlay} onPress={handleCancelPin}>
+          <Pressable style={styles.settingsModal} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="lock-closed" size={20} color="#1F5CA9" />
+              <Text style={styles.modalTitle} numberOfLines={1}>Đổi mã PIN</Text>
+              <TouchableOpacity
+                onPress={handleCancelPin}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={22} color="#7A8FAD" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.tuneFieldLabel}>Mã PIN hiện tại</Text>
+            <View style={styles.tuneInputWithIcon}>
+              <TextInput
+                style={styles.tuneInputInner}
+                value={currentPinInput}
+                onChangeText={(t) => {
+                  if (/^\d{0,6}$/.test(t)) setCurrentPinInput(t);
+                }}
+                keyboardType="number-pad"
+                maxLength={PIN_LENGTH}
+                placeholder="••••••"
+                placeholderTextColor="#A0AEC0"
+                secureTextEntry={!showCurrentPin}
+                autoFocus
+              />
+              <TouchableOpacity
+                style={styles.eyeInner}
+                onPress={() => setShowCurrentPin(p => !p)}
+                activeOpacity={0.6}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons
+                  name={showCurrentPin ? 'eye-off-outline' : 'eye-outline'}
+                  size={19}
+                  color="#7A8FAD"
+                />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.tuneFieldLabel}>Mã PIN mới (6 chữ số)</Text>
+            <View style={styles.tuneInputWithIcon}>
+              <TextInput
+                style={styles.tuneInputInner}
+                value={newPinInput}
+                onChangeText={(t) => {
+                  if (/^\d{0,6}$/.test(t)) setNewPinInput(t);
+                }}
+                keyboardType="number-pad"
+                maxLength={PIN_LENGTH}
+                placeholder="••••••"
+                placeholderTextColor="#A0AEC0"
+                secureTextEntry={!showNewPin}
+              />
+              <TouchableOpacity
+                style={styles.eyeInner}
+                onPress={() => setShowNewPin(p => !p)}
+                activeOpacity={0.6}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons
+                  name={showNewPin ? 'eye-off-outline' : 'eye-outline'}
+                  size={19}
+                  color="#7A8FAD"
+                />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.tuneFieldLabel}>Xác nhận mã PIN mới</Text>
+            <View style={styles.tuneInputWithIcon}>
+              <TextInput
+                style={styles.tuneInputInner}
+                value={confirmPinInput}
+                onChangeText={(t) => {
+                  if (/^\d{0,6}$/.test(t)) setConfirmPinInput(t);
+                }}
+                keyboardType="number-pad"
+                maxLength={PIN_LENGTH}
+                placeholder="••••••"
+                placeholderTextColor="#A0AEC0"
+                secureTextEntry={!showConfirmPin}
+              />
+              <TouchableOpacity
+                style={styles.eyeInner}
+                onPress={() => setShowConfirmPin(p => !p)}
+                activeOpacity={0.6}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons
+                  name={showConfirmPin ? 'eye-off-outline' : 'eye-outline'}
+                  size={19}
+                  color="#7A8FAD"
+                />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.tuneHintText}>
+              Mã PIN mới sẽ được áp dụng từ lần mở app tiếp theo.
+            </Text>
+
+            <View style={styles.tuneBottomActions}>
+              <TouchableOpacity
+                style={styles.tuneBottomButton}
+                onPress={handleCancelPin}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.tuneBottomButtonTextCancel}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.tuneBottomButton}
+                onPress={handleSavePin}
+                activeOpacity={0.7}
+                disabled={dangDoiPin}
+              >
+                {dangDoiPin ? (
+                  <ActivityIndicator size="small" color="#1F5CA9" />
+                ) : (
+                  <Text style={styles.tuneBottomButtonTextSubmit}>Xong</Text>
+                )}
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -1072,71 +1016,70 @@ const styles = StyleSheet.create({
   tuneBottomButtonTextSubmit: { fontSize: 16, fontWeight: '700', color: '#1F5CA9' },
   tuneBottomButtonTextDisabled: { color: '#A3B3CC' },
 
-  scanRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingVertical: 4, marginTop: 4,
+  formatRow: {
+    flexDirection: 'row', gap: 10, marginTop: 4,
   },
-  scanRowLabel: { fontSize: 14, fontWeight: '600', color: '#11181C' },
-  scanRowAction: { fontSize: 14, fontWeight: '700', color: '#1F5CA9' },
+  formatOption: {
+    flex: 1, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 12,
+    backgroundColor: '#F8FAFC', paddingVertical: 14, paddingHorizontal: 10,
+    alignItems: 'center', gap: 4,
+  },
+  formatOptionActive: {
+    borderColor: '#1F5CA9', backgroundColor: '#E8F4FB',
+  },
+  formatOptionText: { fontSize: 15, fontWeight: '700', color: '#4A5568' },
+  formatOptionHint: { fontSize: 11, color: '#7A8FAD' },
+  formatOptionTextActive: { color: '#1F5CA9' },
 
-  wifiList: { marginTop: 14, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: '#E2E8F0' },
-  wifiItem: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 13,
-    backgroundColor: '#ffffff', gap: 10, borderBottomWidth: 1, borderBottomColor: '#F0F4FA',
-  },
-  wifiItemActive: { backgroundColor: '#F0F7FF' },
-  wifiItemActiveOffline: { backgroundColor: '#F1F5F9' },
-  wifiItemName: { flex: 1, fontSize: 14, fontWeight: '500', color: '#11181C' },
-  wifiItemNameActive: { color: '#1F5CA9', fontWeight: '700' },
-  wifiItemNameOffline: { color: '#64748B', fontWeight: '700' },
-  wifiItemBadge: {
-    backgroundColor: '#ffffff', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderColor: '#1F5CA9', borderWidth: 1, marginLeft: 6,
-  },
-  wifiItemBadgeText: { fontSize: 11, fontWeight: '600', color: '#1F5CA9' },
-  wifiItemBadgeOffline: { borderColor: '#94A3B8', backgroundColor: '#F1F5F9' },
-  wifiItemBadgeTextOffline: { color: '#64748B' },
-  noWifiText: { textAlign: 'center', color: '#7A8FAD', fontSize: 13, marginTop: 16, marginBottom: 4 },
-
-  connectingBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: '#1F5CA9', borderRadius: 10, padding: 12, marginTop: 12,
-  },
-  connectingText: { color: '#ffffff', fontSize: 13, fontWeight: '600', flex: 1 },
-
+  // Modal chung
   modalOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 20,
-  },
-  passwordModal: {
-    backgroundColor: '#ffffff', borderRadius: 20, padding: 20, width: '100%', maxWidth: 380,
-    elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12,
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center', alignItems: 'center', padding: 20,
   },
   settingsModal: {
-    backgroundColor: '#ffffff', borderRadius: 20, padding: 20, width: '100%', maxWidth: 420, maxHeight: '85%',
+    backgroundColor: '#ffffff', borderRadius: 20, padding: 20, width: '100%', maxWidth: 420,
     elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12,
   },
-  settingsModalScroll: { flexGrow: 0 },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
-  modalTitle: { fontSize: 16, fontWeight: '700', color: '#11181C', flex: 1 },
+  modalHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4,
+  },
+  modalTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: '#11181C' },
   modalActions: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingTop: 6, marginTop: 16, gap: 4
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8,
   },
-  modalBottomButton: { paddingVertical: 10, paddingHorizontal: 10 },
-  modalBottomButtonTextCancel: { fontSize: 14, fontWeight: '700', color: '#000000' },
-  modalBottomButtonTextSubmit: { fontSize: 14, fontWeight: '700', color: '#1F5CA9' },
-  offlineCard: {
-    backgroundColor: '#FEF2F2', borderRadius: 20, overflow: 'hidden',
-    elevation: 2, shadowColor: '#DC2626',
-    shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8,
+  modalBottomButton: { paddingVertical: 10, paddingHorizontal: 6, minWidth: 48, alignItems: 'center' },
+  modalBottomButtonTextCancel: { fontSize: 16, fontWeight: '700', color: '#000000' },
+  modalBottomButtonTextSubmit: { fontSize: 16, fontWeight: '700', color: '#1F5CA9' },
+  modalBottomButtonDisabled: { opacity: 0.4 },
+
+  // Modal Wi-Fi AP
+  wifiModal: {
+    backgroundColor: '#ffffff', borderRadius: 20, padding: 20, width: '100%', maxWidth: 420, maxHeight: '90%',
+    elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12,
   },
-  offlineCardHeader: {
-    flexDirection: 'row', alignItems: 'center',
-    padding: 16, gap: 12,
+  wifiModalScroll: { flexGrow: 0 },
+  guideBox: {
+    marginTop: 16,
+    marginBottom: 2, // + marginTop 14 của label = 16, đều với khoảng cách giữa các bước
   },
-  offlineIconBox: {
-    width: 40, height: 40, borderRadius: 12,
-    backgroundColor: '#FEE2E2', alignItems: 'center', justifyContent: 'center',
+  guideStep: { flexDirection: 'row', gap: 12 },
+  guideLeft: { alignItems: 'center', width: 26 },
+  guideBadge: {
+    width: 26, height: 26, borderRadius: 13,
+    backgroundColor: '#1F5CA9', alignItems: 'center', justifyContent: 'center',
   },
-  offlineCardTitle: { fontSize: 16, fontWeight: '700', color: '#B91C1C' },
-  offlineCardSubtitle: { fontSize: 12, color: '#DC2626', marginTop: 2 },
+  guideBadgeText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  guideLine: {
+    flex: 1, width: 2, marginTop: 4,
+    backgroundColor: '#BFD6F0', borderRadius: 1,
+  },
+  guideContent: { flex: 1, paddingTop: 2 },
+  guideStepTitle: { fontSize: 13.5, fontWeight: '700', color: '#11181C', marginBottom: 3 },
+  guideStepText: { fontSize: 12.5, color: '#475569', lineHeight: 19, textAlign: 'justify' },
+  guideChip: { fontWeight: '700', color: '#1F5CA9' },
+  guideHighlight: { fontWeight: '700', color: '#1F5CA9' },
+  wifiSection: { marginBottom: 16 },
+  wifiInputWrap: {
+    borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 12, backgroundColor: '#F8FAFC', paddingHorizontal: 14,
+  },
 } as any);
