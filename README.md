@@ -24,7 +24,7 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
 4. Prebuild
 
    ```bash
-   npx expo prebuild -p android
+   npx expo prebuild -p android --clean
    ```
 
 ## Get a fresh project

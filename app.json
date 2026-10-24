@@ -16,8 +16,7 @@
         "backgroundColor": "#FFFFFF"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.trafankha.App",
-      "usesCleartextTraffic": true
+      "package": "com.trafankha.App"
     },
     "web": {
       "output": "static",
@@ -53,7 +52,8 @@
           "android": {
             "buildArchs": ["arm64-v8a"],
             "enableMinifyInReleaseBuilds": true,
-            "enableShrinkResourcesInReleaseBuilds": true
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "usesCleartextTraffic": true
           }
         }
       ]

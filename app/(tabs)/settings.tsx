@@ -17,6 +17,7 @@ import {
   View,
 } from 'react-native';
 
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { FeedbackModal } from '../../components/feedbackmodal';
 import { db } from '../../config/firebaseConfig';
 import { useESPConnection } from '../../hooks';
@@ -72,17 +73,214 @@ const GuideStep = ({
   </View>
 );
 
+type WifiApModalProps = {
+  visible: boolean;
+  onClose: () => void;
+  onResult: (result: { success: boolean; message: string }) => void;
+};
+
+// Modal cấu hình Wi-Fi qua AP. State nhập liệu nằm trong component này nên gõ chữ
+// chỉ render lại modal, không render lại cả màn hình Cài đặt (đây là nguyên nhân gây đơ).
+const WifiApModal = React.memo(function WifiApModal({ visible, onClose, onResult }: WifiApModalProps) {
+  const [ssid, setSsid] = useState('');
+  const [pass, setPass] = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [sending, setSending] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+
+  // Đẩy card lên theo bàn phím bằng animation chạy trên UI thread
+  const kbHeight = useSharedValue(0);
+  const kbStyle = useAnimatedStyle(() => ({ paddingBottom: kbHeight.value }));
+
+  // Mỗi lần mở modal: xóa dữ liệu cũ
+  useEffect(() => {
+    if (visible) {
+      setSsid('');
+      setPass('');
+      setShowPass(false);
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    let scrollTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      kbHeight.value = withTiming(e.endCoordinates.height, {
+        duration: 250,
+        easing: Easing.out(Easing.cubic),
+      });
+      // Đợi card đẩy lên xong rồi mới cuộn, để 2 chuyển động không chồng nhau
+      scrollTimer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 280);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, () => {
+      kbHeight.value = withTiming(0, { duration: 200, easing: Easing.out(Easing.cubic) });
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+      if (scrollTimer) clearTimeout(scrollTimer);
+      kbHeight.value = 0;
+    };
+  }, [visible, kbHeight]);
+
+  const handleClose = () => {
+    Keyboard.dismiss();
+    onClose();
+  };
+
+  const handleSend = async () => {
+    Keyboard.dismiss();
+    const name = ssid.trim();
+    if (!name) return;
+    setSending(true);
+    const result = await sendWifiConfigViaAP(name, pass);
+    setSending(false);
+    if (result.success) setPass('');
+    onResult(result);
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      navigationBarTranslucent
+      onRequestClose={handleClose}
+    >
+      <Animated.View style={[{ flex: 1 }, kbStyle]}>
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={handleClose}
+        >
+          <Pressable
+            style={styles.wifiModal}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.modalHeader}>
+              <Ionicons name="wifi" size={22} color="#1F5CA9" />
+              <Text style={styles.modalTitle} numberOfLines={1}>Cấu hình Wi-Fi</Text>
+              <TouchableOpacity
+                onPress={handleClose}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                disabled={sending}
+              >
+                <Ionicons name="close" size={22} color="#7A8FAD" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              ref={scrollRef}
+              style={styles.wifiModalScroll}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Hướng dẫn 3 bước */}
+              <View style={styles.guideBox}>
+                <GuideStep index={1} title="Khởi động lại đồng hồ">
+                  Nếu chưa có Wi-Fi đã lưu hoặc mạng cũ bị lỗi, đồng hồ sẽ tự phát Wi-Fi tên{' '}
+                  <Text style={styles.guideChip}>LED_P10</Text>
+                </GuideStep>
+
+                <GuideStep index={2} title="Kết nối Wi-Fi của đồng hồ">
+                  Vào Cài đặt Wi-Fi của điện thoại, chọn mạng{' '}
+                  <Text style={styles.guideChip}>LED_P10</Text> (không cần mật khẩu).
+                </GuideStep>
+
+                <GuideStep index={3} title="Gửi thông tin Wi-Fi" isLast>
+                  Quay lại đây, nhập tên + mật khẩu Wi-Fi và nhấn{' '}
+                  <Text style={styles.guideHighlight}>Gửi</Text>.
+                </GuideStep>
+              </View>
+
+              {/* Nhập thông tin Wi-Fi */}
+              <View style={styles.wifiSection}>
+                <Text style={styles.tuneFieldLabel}>Tên Wi-Fi</Text>
+                <View style={styles.wifiInputWrap}>
+                  <TextInput
+                    style={styles.inputInner}
+                    placeholder="Nhập tên Wi-Fi"
+                    placeholderTextColor="#A0AEC0"
+                    value={ssid}
+                    onChangeText={setSsid}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!sending}
+                  />
+                </View>
+
+                <Text style={styles.tuneFieldLabel}>Mật khẩu Wi-Fi</Text>
+                <View style={styles.inputWithIcon}>
+                  <TextInput
+                    style={styles.inputInner}
+                    placeholder="Nhập mật khẩu (nếu có)"
+                    placeholderTextColor="#A0AEC0"
+                    value={pass}
+                    onChangeText={setPass}
+                    secureTextEntry={!showPass}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!sending}
+                  />
+                  <TouchableOpacity
+                    style={styles.eyeInner}
+                    onPress={() => setShowPass(p => !p)}
+                    activeOpacity={0.6}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons
+                      name={showPass ? 'eye-off-outline' : 'eye-outline'}
+                      size={19}
+                      color="#7A8FAD"
+                    />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Nút hành động */}
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.modalBottomButton}
+                  onPress={handleClose}
+                  activeOpacity={0.7}
+                  disabled={sending}
+                >
+                  <Text style={styles.modalBottomButtonTextCancel}>Hủy</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.modalBottomButton,
+                    (!ssid.trim() || sending) && styles.modalBottomButtonDisabled,
+                  ]}
+                  onPress={handleSend}
+                  activeOpacity={0.7}
+                  disabled={!ssid.trim() || sending}
+                >
+                  {sending ? (
+                    <ActivityIndicator size="small" color="#1F5CA9" />
+                  ) : (
+                    <Text style={styles.modalBottomButtonTextSubmit}>Gửi</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Animated.View>
+    </Modal>
+  );
+});
+
 export default function SettingsScreen() {
   useESPConnection();
 
   const scrollRef = useRef<any>(null);
   const [currentSsid, setCurrentSsid] = useState<string | null>(null);
-
-  // AP Wi-Fi setup states
-  const [wifiSsidInput, setWifiSsidInput] = useState('');
-  const [wifiPassInput, setWifiPassInput] = useState('');
-  const [showWifiPass, setShowWifiPass] = useState(false);
-  const [isSendingAP, setIsSendingAP] = useState(false);
 
   const [brightness, setBrightness] = useState(100);
   const [savedBrightness, setSavedBrightness] = useState(100);
@@ -123,7 +321,8 @@ export default function SettingsScreen() {
   useEffect(() => {
     const unsubWifi = onValue(ref(db, 'WiFi/ssidHienTai'), (snap) => {
       const val = snap.val();
-      if (typeof val === 'string' && val.length > 0) setCurrentSsid(val);
+      // Có tên -> hiện tên; bị xóa / rỗng / không phải chuỗi -> quay về null (hiện "Chưa có")
+      setCurrentSsid(typeof val === 'string' && val.length > 0 ? val : null);
     });
     const unsubBright = onValue(ref(db, 'DongHo/DoSang'), (snap) => {
       const val = snap.val();
@@ -154,27 +353,18 @@ export default function SettingsScreen() {
     };
   }, []);
 
-  const handleSendWifiAP = async () => {
+  const handleCloseWifiModal = () => {
     Keyboard.dismiss();
-    if (!wifiSsidInput.trim()) {
-      showError('Chưa nhập tên Wi-Fi', 'Vui lòng nhập tên mạng Wi-Fi.');
-      return;
-    }
-    setIsSendingAP(true);
-    const result = await sendWifiConfigViaAP(wifiSsidInput.trim(), wifiPassInput);
-    setIsSendingAP(false);
+    setExpandedCard(null);
+  };
+
+  const handleWifiResult = (result: { success: boolean; message: string }) => {
     if (result.success) {
       setExpandedCard(null);
-      setWifiPassInput('');
       showSuccess('Gửi thành công', result.message);
     } else {
       showError('Gửi thất bại', formatLoiGach(result.message));
     }
-  };
-
-  const handleCloseWifiModal = () => {
-    Keyboard.dismiss();
-    setExpandedCard(null);
   };
 
   const handleSaveBrightness = async () => {
@@ -304,10 +494,6 @@ export default function SettingsScreen() {
 
   const toggleCard = (card: 'wifi' | 'brightness' | 'ring' | 'format' | 'pin') => {
     Keyboard.dismiss();
-    if (card === 'wifi') {
-      setWifiSsidInput('');
-      setWifiPassInput('');
-    }
     if (card === 'format') setDinhDang24GioInput(savedDinhDang24Gio);
     if (card === 'pin') {
       setCurrentPinInput('');
@@ -357,7 +543,7 @@ export default function SettingsScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.cardTitle}>Cấu hình Wi-Fi</Text>
                   <Text style={styles.cardSubtitle}>
-                    Hiện tại: <Text style={styles.cardSubtitleBold}>{currentSsid}</Text>
+                    Hiện tại: <Text style={styles.cardSubtitleBold}>{currentSsid || 'Chưa có'}</Text>
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -442,131 +628,12 @@ export default function SettingsScreen() {
         </View>
       </ScrollView>
 
-      {/* Modal: Cài đặt Wi-Fi qua AP (LED_P10) */}
-      <Modal
+      {/* Modal: Cài đặt Wi-Fi qua AP (LED_P10) - tách riêng để gõ chữ không render lại cả màn hình */}
+      <WifiApModal
         visible={expandedCard === 'wifi'}
-        transparent
-        animationType="fade"
-        onRequestClose={handleCloseWifiModal}
-      >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={handleCloseWifiModal}
-        >
-          <Pressable
-            style={styles.wifiModal}
-            onPress={(e) => e.stopPropagation()}
-          >
-            <View style={styles.modalHeader}>
-              <Ionicons name="wifi" size={22} color="#1F5CA9" />
-              <Text style={styles.modalTitle} numberOfLines={1}>Cấu hình Wi-Fi</Text>
-              <TouchableOpacity
-                onPress={handleCloseWifiModal}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                disabled={isSendingAP}
-              >
-                <Ionicons name="close" size={22} color="#7A8FAD" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              style={styles.wifiModalScroll}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              {/* Hướng dẫn 3 bước */}
-              <View style={styles.guideBox}>
-                <GuideStep index={1} title="Khởi động lại đồng hồ">
-                  Nếu chưa có Wi-Fi đã lưu hoặc mạng cũ bị lỗi, đồng hồ sẽ tự phát Wi-Fi tên{' '}
-                  <Text style={styles.guideChip}>LED_P10</Text>
-                </GuideStep>
-
-                <GuideStep index={2} title="Kết nối Wi-Fi của đồng hồ">
-                  Vào Cài đặt Wi-Fi của điện thoại, chọn mạng{' '}
-                  <Text style={styles.guideChip}>LED_P10</Text> (không cần mật khẩu).
-                </GuideStep>
-
-                <GuideStep index={3} title="Gửi thông tin Wi-Fi" isLast>
-                  Quay lại đây, nhập tên + mật khẩu Wi-Fi và nhấn{' '}
-                  <Text style={styles.guideHighlight}>Gửi</Text>.
-                </GuideStep>
-              </View>
-
-              {/* Nhập thông tin Wi-Fi */}
-              <View style={styles.wifiSection}>
-                <Text style={styles.tuneFieldLabel}>Tên Wi-Fi</Text>
-                <View style={styles.wifiInputWrap}>
-                  <TextInput
-                    style={styles.inputInner}
-                    placeholder="Nhập tên Wi-Fi"
-                    placeholderTextColor="#A0AEC0"
-                    value={wifiSsidInput}
-                    onChangeText={setWifiSsidInput}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    editable={!isSendingAP}
-                  />
-                </View>
-
-                <Text style={styles.tuneFieldLabel}>Mật khẩu Wi-Fi</Text>
-                <View style={styles.inputWithIcon}>
-                  <TextInput
-                    style={styles.inputInner}
-                    placeholder="Nhập mật khẩu (nếu có)"
-                    placeholderTextColor="#A0AEC0"
-                    value={wifiPassInput}
-                    onChangeText={setWifiPassInput}
-                    secureTextEntry={!showWifiPass}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    editable={!isSendingAP}
-                  />
-                  <TouchableOpacity
-                    style={styles.eyeInner}
-                    onPress={() => setShowWifiPass(p => !p)}
-                    activeOpacity={0.6}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Ionicons
-                      name={showWifiPass ? 'eye-off-outline' : 'eye-outline'}
-                      size={19}
-                      color="#7A8FAD"
-                    />
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {/* Nút hành động */}
-              <View style={styles.modalActions}>
-                <TouchableOpacity
-                  style={styles.modalBottomButton}
-                  onPress={handleCloseWifiModal}
-                  activeOpacity={0.7}
-                  disabled={isSendingAP}
-                >
-                  <Text style={styles.modalBottomButtonTextCancel}>Hủy</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.modalBottomButton,
-                    (!wifiSsidInput.trim() || isSendingAP) && styles.modalBottomButtonDisabled,
-                  ]}
-                  onPress={handleSendWifiAP}
-                  activeOpacity={0.7}
-                  disabled={!wifiSsidInput.trim() || isSendingAP}
-                >
-                  {isSendingAP ? (
-                    <ActivityIndicator size="small" color="#1F5CA9" />
-                  ) : (
-                    <Text style={styles.modalBottomButtonTextSubmit}>Gửi</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
+        onClose={handleCloseWifiModal}
+        onResult={handleWifiResult}
+      />
 
       {/* Modal: Độ sáng LED */}
       <Modal

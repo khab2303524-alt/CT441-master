@@ -67,7 +67,6 @@ export default function ClockScreen() {
   const seenChangeRef = useRef(false);
   const isDeviceStale = (now: number) =>
     now - lastChangeRef.current > (seenChangeRef.current ? STALE_MS : INITIAL_STALE_MS);
-  const [isNtpMode, setIsNtpMode] = useState(false);
 
   const toEpochMs = (d: { Gio: number; Phut: number; Giay: number; Ngay: number; Thang: number; Nam: number }) =>
     new Date(d.Nam, d.Thang - 1, d.Ngay, d.Gio, d.Phut, d.Giay).getTime();
@@ -93,18 +92,9 @@ export default function ClockScreen() {
     const newEpochMs = toEpochMs({ Gio, Phut, Giay, Ngay, Thang, Nam });
     if (!Number.isFinite(newEpochMs)) return;
 
-    // Giây/giờ từ thiết bị có đổi so với lần trước -> thiết bị còn sống
-    if (newEpochMs !== lastRawEpochRef.current) {
-      if (lastRawEpochRef.current !== null) seenChangeRef.current = true; // giá trị thứ 2 trở đi = thiết bị đang gửi
-      lastRawEpochRef.current = newEpochMs;
-      lastChangeRef.current = Date.now();
-      if (ntpModeRef.current) {
-        // Thiết bị gửi giờ lại: thoát chế độ NTP, xóa neo để ép resync ngay bên dưới
-        ntpModeRef.current = false;
-        setIsNtpMode(false);
-        anchorRef.current = null;
-      }
-    }
+    // Đang dùng giờ mạng (thiết bị đã im > ngưỡng): không neo lại vào giờ cũ của thiết bị.
+    // Việc phát hiện thiết bị gửi giờ lại do effect theo dõi trực tiếp Firebase bên dưới xử lý.
+    if (ntpModeRef.current) return;
 
     const now = Date.now();
     const anchor = anchorRef.current;
@@ -118,6 +108,38 @@ export default function ClockScreen() {
     }
     // else: lệch nhỏ do trễ mạng -> giữ nguyên neo cũ, không đụng vào display
   }, [timeData]);
+
+  // Theo dõi TRỰC TIẾP node mà ESP đẩy giờ lên (/DongHo/ThoiGian), không phụ thuộc hook useESPTime,
+  // để biết chắc thiết bị còn gửi giờ hay không. Giờ thô đổi = thiết bị còn sống.
+  useEffect(() => {
+    const unsub = onValue(ref(db, 'DongHo/ThoiGian'), (snapshot) => {
+      const v = snapshot.val();
+      const g = v?.GioGiac;
+      const d = v?.Date;
+      if (!g || !d) return;
+      const epoch = toEpochMs({
+        Gio: Number(g.Gio), Phut: Number(g.Phut), Giay: Number(g.Giay),
+        Ngay: Number(d.Ngay), Thang: Number(d.Thang), Nam: Number(d.Nam),
+      });
+      if (!Number.isFinite(epoch)) return;
+
+      if (epoch !== lastRawEpochRef.current) {
+        if (lastRawEpochRef.current !== null) seenChangeRef.current = true; // giá trị thứ 2 trở đi = thiết bị đang gửi
+        lastRawEpochRef.current = epoch;
+        lastChangeRef.current = Date.now();
+        if (ntpModeRef.current) {
+          // Thiết bị gửi giờ lại: thoát chế độ NTP, neo lại vào giờ thiết bị ngay
+          ntpModeRef.current = false;
+          anchorRef.current = null;
+        }
+      }
+      if (!anchorRef.current) {
+        anchorRef.current = { epochMs: epoch, receivedAtMs: Date.now() };
+        applyDisplayFromEpoch(epoch);
+      }
+    });
+    return () => unsub();
+  }, []);
 
   // Đồng bộ các trường chỉnh giờ/ngày trong modal khi có dữ liệu mới (tách riêng khỏi anchor)
   useEffect(() => {
@@ -140,7 +162,6 @@ export default function ClockScreen() {
       if (isDeviceStale(now)) {
         if (!ntpModeRef.current) {
           ntpModeRef.current = true;
-          setIsNtpMode(true);
           anchorRef.current = null;
         }
         applyDisplayFromEpoch(now);
@@ -249,13 +270,6 @@ export default function ClockScreen() {
               <FontAwesome6 name="calendar-day" size={13} color="#1F5CA9" style={{ marginRight: 8 }} />
               <Text style={styles.dateDisplay}>{dateStr}</Text>
             </View>
-
-            {isNtpMode && (
-              <View style={styles.ntpBadge}>
-                <FontAwesome6 name="globe" size={11} color="#B45309" style={{ marginRight: 6 }} />
-                <Text style={styles.ntpBadgeText}>Thiết bị không gửi giờ - đang dùng giờ mạng (NTP)</Text>
-              </View>
-            )}
           </View>
 
           <View style={styles.sectionLabelContainer}>
@@ -522,8 +536,6 @@ const styles = StyleSheet.create({
 
   dateContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 14, backgroundColor: '#F1F5F9', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 100 },
   dateDisplay: { fontSize: 13, color: '#475569', fontWeight: '700' },
-  ntpBadge: { flexDirection: 'row', alignItems: 'center', marginTop: 10, backgroundColor: '#FEF3C7', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 100 },
-  ntpBadgeText: { fontSize: 11, fontWeight: '700', color: '#B45309' },
 
   sectionLabelContainer: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4, paddingHorizontal: 4 },
   sectionLabel: { fontSize: 12, fontWeight: '900', color: '#1F5CA9', letterSpacing: 1 },
