@@ -16,7 +16,7 @@ const DEVICE_OFFLINE_ALERT = {
   message: 'Thử kiểm tra nguồn thiết bị hoặc Wi-Fi.',
 };
 const DEVICE_RECONNECT_ALERT = {
-  
+
   title: 'Đã kết nối lại',
   message: 'Thiết bị đã hoạt động trở lại.',
 };
@@ -29,6 +29,7 @@ const DEVICE_RECONNECT_ALERT = {
 let online = true;
 let lastHeartbeat = Date.now();
 let lastGiayValue: unknown = null; // giá trị Giay lần gần nhất, để phân biệt "có dữ liệu mới" với onValue fire lại do SDK tự reconnect
+let trangThaiWiFi = 'CHO_PHEP';
 let subscriberCount = 0; // số màn hình đang dùng hook
 let stopMonitoring: (() => void) | null = null;
 const stateListeners = new Set<() => void>();
@@ -42,6 +43,11 @@ const setOnline = (next: boolean) => {
 const startMonitoring = () => {
   lastHeartbeat = Date.now();
   lastGiayValue = null;
+
+  const unsubTrangThaiWiFi = onValue(ref(db, 'DongHo/TrangThaiWiFi'), (snap) => {
+    const val = snap.val();
+    if (val) trangThaiWiFi = val;
+  });
 
   const unsubHeartbeat = onValue(ref(db, 'DongHo/ThoiGian/GioGiac/Giay'), (snap) => {
     const val = snap.val();
@@ -63,8 +69,16 @@ const startMonitoring = () => {
   const checkInterval = setInterval(() => {
     if (online && Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT_MS) {
       setOnline(false);
-      // Alert ghim: không tự tắt, chỉ mất khi thiết bị kết nối lại
-      showPinnedAlert('error', DEVICE_OFFLINE_ALERT.title, DEVICE_OFFLINE_ALERT.message);
+      if (trangThaiWiFi === 'DA_TAT') {
+        showPinnedAlert(
+          'error',
+          'Đã ngắt Wi-Fi',
+          'Bảng đèn đã ngắt Wi-Fi sau giai đoạn cấu hình.\nĐể kết nối lại với App, vui lòng tắt rồi bật lại nguồn bảng đèn.'
+        );
+      } else {
+        // Alert ghim: không tự tắt, chỉ mất khi thiết bị kết nối lại
+        showPinnedAlert('error', DEVICE_OFFLINE_ALERT.title, DEVICE_OFFLINE_ALERT.message);
+      }
     }
   }, HEARTBEAT_CHECK_INTERVAL_MS);
 
@@ -78,6 +92,7 @@ const startMonitoring = () => {
   });
 
   return () => {
+    unsubTrangThaiWiFi();
     unsubHeartbeat();
     clearInterval(checkInterval);
     appStateSub.remove();
