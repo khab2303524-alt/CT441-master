@@ -314,8 +314,7 @@ export default function SettingsScreen() {
     setFeedbackModal({ visible: true, type: 'error', title, message });
   const hideFeedback = () => setFeedbackModal(prev => ({ ...prev, visible: false }));
 
-  // Trạng thái online dùng chung toàn app. Alert mất kết nối / kết nối lại do hook tự hiển thị
-  // (1 lần cho cả app); thietBiOnline ở đây dùng cho badge trong modal Wi-Fi.
+  // Trạng thái online dùng chung toàn app (không hiện popup alert)
   const thietBiOnline = useDeviceOnline();
 
   useEffect(() => {

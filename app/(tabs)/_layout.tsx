@@ -52,13 +52,6 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="clock"
-        options={{
-          title: 'Đồng hồ',
-          tabBarIcon: ({ color }) => <IconSymbol size={25} name="clock.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
         name="settings"
         options={{
           title: 'Cài đặt',

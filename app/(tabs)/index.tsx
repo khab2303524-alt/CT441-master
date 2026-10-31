@@ -95,10 +95,10 @@ export default function ScheduleScreen() {
 
   useESPConnection();
 
-  // Theo dõi kết nối thiết bị; alert mất kết nối / kết nối lại do hook hiển thị chung cho cả app
+  // Theo dõi trạng thái thiết bị online/offline ngầm cho toàn app (không hiện popup alert)
   useDeviceOnline();
 
-  // Tự động khôi phục báo thức khi rời khỏi màn hình này (chuyển tab clock/settings)
+  // Tự động khôi phục báo thức khi rời khỏi màn hình này (chuyển tab cài đặt)
   // Chỉ khôi phục nếu đang ở tab "manual" và có báo thức đang bị tạm tắt
   useFocusEffect(
     useCallback(() => {
